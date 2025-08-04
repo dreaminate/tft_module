@@ -123,23 +123,32 @@ class MyTFTModule(LightningModule):
                     self.metric_target_idx.append(i)
                     found = True
                     self.metric_is_classification.append(
-                        any(n.endswith(suffix) for suffix in ["_f1", "_precision", "_recall", "_accuracy", "_ap", "_auc"])
+                        any(
+                            n.endswith(suffix)
+                            for suffix in ["_f1", "_precision", "_recall", "_accuracy", "_ap", "_auc"]
+                        )
                     )
                     break
             if not found:
                 raise ValueError(f"Cannot find matching target prefix for metric: {n}")
 
+        # ensure period mapping is available before validating composite weight keys
+        self.period_map = period_map or {0: "1h", 1: "4h", 2: "1d"}
+
         provided_keys = set(composite_weights.keys())
-        expected_keys = set(f"val_{n}" for n in self.metric_names)
+        expected_keys = {
+            f"val_{n}@{p}" for n in self.metric_names for p in self.period_map.values()
+        }
         missing = expected_keys - provided_keys
         if missing:
-            print(f"[⚠️ Warning] The following metrics will NOT be used in composite_score:\n{sorted(missing)}")
+            print(
+                f"[⚠️ Warning] The following metric-period combinations will NOT be used in composite_score:\n{sorted(missing)}"
+            )
 
         self.hparams.composite_weights = composite_weights
         self.hparams.learning_rate = learning_rate
         self.save_hyperparameters(ignore=["loss_fn", "metrics_list", "model", "logging_metrics"])
 
-        self.period_map = period_map or {0: "1h", 1: "4h", 2: "1d"}
         print(f"✅ static_input_size={self.static_input_size}")
     def setup(self, stage: str):
         self.metrics_list = nn.ModuleList([m.to(self.device) for m in self.metrics_list])
