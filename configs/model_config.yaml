@@ -1,0 +1,31 @@
+data_path: data/parquet_merged/full_merged.parquet
+resume_ckpt: checkpoints/tft-last.ckpt
+warm_start_ckpt: checkpoints/tft-best.ckpt
+
+
+# 验证集划分方式
+val_mode: ratio
+val_days: 14     # 若 val_mode = "days"
+val_ratio: 0.1    # 若 val_mode = "ratio"
+
+
+
+
+sampler_mode: "None"  # 可选 "balanced", "focus", None  如果 sampler_mode 为 None，则不使用采样器
+focus_period: None  # 如果 sampler_mode 为 "focus"，则传入 "1d" 或 "4h" 或 "1h"  否则为 None
+batch_size: 64
+num_workers: 4
+hidden_size: 128
+lstm_layers: 2
+attention_head_size: 8
+dropout: 0.15
+learning_rate: 0.003
+max_epochs: 20
+precision: "16-mixed"
+grad_clip: 0.2
+accumulate: 2
+early_stop_patience: 5
+log_name: tft_multi
+resume_ckpt: checkpoints/tft-last.ckpt
+warm_start_ckpt: checkpoints/tft-best.ckpt
+

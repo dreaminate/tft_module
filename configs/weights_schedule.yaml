@@ -1,0 +1,38 @@
+# ⚙️ 分阶段 loss 权重设置（基于 epoch 切换）
+# 每阶段需指定起始 epoch 以及各目标的 loss 权重（按顺序匹配）
+
+- epoch: 0
+  weights:
+    - 1.0  # target_binarytrend_1h
+    - 1.0  # target_logreturn_1h
+    - 1.0  # target_logsharpe_ratio_1h
+    - 1.0  # target_binarytrend_4h
+    - 1.0  # target_logreturn_4h
+    - 1.0  # target_logsharpe_ratio_4h
+    - 1.0  # target_binarytrend_1d
+    - 1.0  # target_logreturn_1d
+    - 1.0  # target_logsharpe_ratio_1d
+
+- epoch: 10
+  weights:
+    - 3.0  # binarytrend 权重上升
+    - 1.0
+    - 1.0
+    - 3.0
+    - 1.0
+    - 1.0
+    - 3.0
+    - 1.0
+    - 1.0
+
+- epoch: 20
+  weights:
+    - 2.0
+    - 2.0  # logreturn 权重上升
+    - 1.0
+    - 2.0
+    - 2.0
+    - 1.0
+    - 2.0
+    - 2.0
+    - 1.0

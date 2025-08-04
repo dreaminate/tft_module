@@ -1,0 +1,97 @@
+# === composite_score.yaml（完整展开，可直接使用）===
+
+# 🎯 target_binarytrend（二分类指标：f1 权重大，其余为辅助）
+val_target_binarytrend_f1@1h: 4.08
+val_target_binarytrend_roc_auc@1h: 2.04
+val_target_binarytrend_accuracy@1h: 1.0
+val_target_binarytrend_precision@1h: 1.0
+val_target_binarytrend_recall@1h: 1.0
+val_target_binarytrend_ap@1h: 1.0
+
+val_target_binarytrend_f1@4h: 2.04
+val_target_binarytrend_roc_auc@4h: 1.02
+val_target_binarytrend_accuracy@4h: 0.5
+val_target_binarytrend_precision@4h: 0.5
+val_target_binarytrend_recall@4h: 0.5
+val_target_binarytrend_ap@4h: 0.5
+
+val_target_binarytrend_f1@1d: 0.68
+val_target_binarytrend_roc_auc@1d: 0.34
+val_target_binarytrend_accuracy@1d: 0.2
+val_target_binarytrend_precision@1d: 0.2
+val_target_binarytrend_recall@1d: 0.2
+val_target_binarytrend_ap@1d: 0.2
+
+
+
+# 📈 回归指标统一配置（RMSE 权重大于 MAE）
+
+val_target_logreturn_rmse@1h: -1.6
+val_target_logreturn_mae@1h: -0.8
+val_target_logreturn_rmse@4h: -0.8
+val_target_logreturn_mae@4h: -0.4
+val_target_logreturn_rmse@1d: -0.27
+val_target_logreturn_mae@1d: -0.135
+
+val_target_logsharpe_ratio_rmse@1h: -0.3
+val_target_logsharpe_ratio_mae@1h: -0.15
+val_target_logsharpe_ratio_rmse@4h: -0.15
+val_target_logsharpe_ratio_mae@4h: -0.075
+val_target_logsharpe_ratio_rmse@1d: -0.05
+val_target_logsharpe_ratio_mae@1d: -0.025
+
+val_target_breakout_count_rmse@1h: -0.3
+val_target_breakout_count_mae@1h: -0.15
+val_target_breakout_count_rmse@4h: -0.15
+val_target_breakout_count_mae@4h: -0.075
+val_target_breakout_count_rmse@1d: -0.05
+val_target_breakout_count_mae@1d: -0.025
+
+val_target_drawdown_prob_rmse@1h: -0.3
+val_target_drawdown_prob_mae@1h: -0.15
+val_target_drawdown_prob_rmse@4h: -0.15
+val_target_drawdown_prob_mae@4h: -0.075
+val_target_drawdown_prob_rmse@1d: -0.05
+val_target_drawdown_prob_mae@1d: -0.025
+
+val_target_max_drawdown_rmse@1h: -0.3
+val_target_max_drawdown_mae@1h: -0.15
+val_target_max_drawdown_rmse@4h: -0.15
+val_target_max_drawdown_mae@4h: -0.075
+val_target_max_drawdown_rmse@1d: -0.05
+val_target_max_drawdown_mae@1d: -0.025
+
+val_target_multiagree_rmse@1h: -0.3
+val_target_multiagree_mae@1h: -0.15
+val_target_multiagree_rmse@4h: -0.15
+val_target_multiagree_mae@4h: -0.075
+val_target_multiagree_rmse@1d: -0.05
+val_target_multiagree_mae@1d: -0.025
+
+val_target_pullback_prob_rmse@1h: -0.3
+val_target_pullback_prob_mae@1h: -0.15
+val_target_pullback_prob_rmse@4h: -0.15
+val_target_pullback_prob_mae@4h: -0.075
+val_target_pullback_prob_rmse@1d: -0.05
+val_target_pullback_prob_mae@1d: -0.025
+
+val_target_return_outlier_lower_10_rmse@1h: -0.3
+val_target_return_outlier_lower_10_mae@1h: -0.15
+val_target_return_outlier_lower_25_rmse@1h: -0.3
+val_target_return_outlier_lower_25_mae@1h: -0.15
+
+val_target_return_outlier_upper_75_rmse@1h: -0.3
+val_target_return_outlier_upper_75_mae@1h: -0.15
+val_target_return_outlier_upper_90_rmse@1h: -0.3
+val_target_return_outlier_upper_90_mae@1h: -0.15
+
+val_target_sideway_detect_rmse@1h: -0.3
+val_target_sideway_detect_mae@1h: -0.15
+
+val_target_trend_persistence_rmse@1h: -0.3
+val_target_trend_persistence_mae@1h: -0.15
+
+# ⚙️ 总体 val_loss（建议保留作为参考项）
+val_loss@1h: -1.2
+val_loss@4h: -1.1
+val_loss@1d: -1.1

@@ -1,0 +1,16 @@
+custom_weights:
+  - 3.0   # target_binarytrend              ← 趋势方向（主任务，分类）
+  - 2.5   # target_logreturn                ← 收益率回归（主任务，回归）
+  - 2.5   # target_logsharpe_ratio          ← 风险调整收益（主任务，回归）
+  - 1.5   # target_breakout_count           ← 连续上涨/突破强度
+  - 1.8   # target_drawdown_prob            ← 回撤识别（分类）
+  - 2.0   # target_max_drawdown             ← 最大回撤值（回归）
+  - 2.0   # target_multiagree               ← 多周期一致方向（辅助分类）
+  - 1.8   # target_pullback_prob            ← 回调信号（辅助分类）
+  - 1.2   # target_return_outlier_lower_10  ← 极端负收益（异常识别）
+  - 1.0   # target_return_outlier_lower_25  ← 弱负收益（辅助分类）
+  - 1.0   # target_return_outlier_upper_75  ← 弱正收益（辅助分类）
+  - 1.2   # target_return_outlier_upper_90  ← 极端正收益（异常识别）
+  - 1.0   # target_sideway_detect           ← 震荡市场判断（分类）
+  - 2.5   # target_trend3class              ← 趋势三分类（主任务）
+  - 2.0   # target_trend_persistence        ← 趋势持续时间（回归）
