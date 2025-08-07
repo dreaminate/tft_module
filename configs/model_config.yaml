@@ -1,0 +1,33 @@
+data_path: data/pkl_merged/full_merged.pkl
+resume_ckpt: checkpoints/last.ckpt
+warm_start_ckpt: checkpoints/best.ckpt
+
+
+# 验证集划分方式
+val_mode: ratio
+val_days: 14     # 若 val_mode = "days"
+val_ratio: 0.2   # 若 val_mode = "ratio"
+batch_size: 512
+num_workers: 15
+hidden_size: 192
+lstm_layers: 2
+attention_head_size: 8
+dropout: 0.2
+learning_rate: 7.59e-02
+max_epochs: 10
+precision: "16-mixed"
+grad_clip: 0.2
+accumulate: 2
+early_stop_patience: 5
+log_name: tft_multi
+
+loss_schedule:
+  0: [6.0, 3.0, 4.0, 1.5, 3.5, 2.5, 1.5, 1.2, 1.2, 1.8, 1.3]
+  5: [5.0, 3.0, 3.5, 1.5, 3.0, 2.0, 1.5, 1.0, 1.0, 1.5, 1.0]
+
+
+#    python train_multi_tft.py --config configs/model_config.yaml   
+#  python train_resume.py 
+
+
+
