@@ -1,90 +1,42 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
+import torch
+from collections import defaultdict
 
-import sys
-import os
-import pandas as pd
-import numpy as np
+def compute_raw_means(model, loss_fn, dataloader, device=None, warmup_steps=100):
+    """
+    进行 Warm-up 计算各子损失的平均值 raw_means。
 
-def check_dataset(path: str, head_n: int = 5):
-    # 1. 文件存在与大小
-    if not os.path.isfile(path):
-        print(f"[ERROR] 文件不存在: {path}")
-        sys.exit(1)
-    size = os.path.getsize(path)
-    if size == 0:
-        print(f"[ERROR] 文件大小为 0 字节: {path}")
-        sys.exit(1)
-    print(f"[INFO] 读取文件: {path} ({size/1024:.1f} KB)")
+    参数:
+    - model:    LightningModule 或 nn.Module，需有 forward(x) 返回 list of preds per task
+    - loss_fn:  HybridMultiLoss 实例（不需要 raw_means）
+    - dataloader: PyTorch DataLoader，用于迭代训练数据
+    - device:   torch.device，对模型和数据进行移动
+    - warmup_steps: int，最多取 warmup_steps 个 batch 进行统计
 
-    # 2. 读取数据
-    if path.endswith('.parquet'):
-        df = pd.read_parquet(path)
-    elif path.endswith('.csv'):
-        df = pd.read_csv(path)
-    else:
-        print("[ERROR] 仅支持 .parquet 或 .csv 文件")
-        sys.exit(1)
+    返回:
+    - raw_means: torch.Tensor，shape [n_tasks]，各子损失的平均 raw loss
+    """
+    model.eval()
+    if device is None:
+        device = next(model.parameters()).device
+    # 初始化
+    n_tasks = len(loss_fn.losses)
+    sum_losses = torch.zeros(n_tasks, device=device)
+    count = 0
 
-    # 3. 空表检查
-    if df.empty:
-        print(f"[WARNING] 数据表为空 (shape={df.shape})")
-        sys.exit(0)
+    with torch.no_grad():
+        for batch_idx, batch in enumerate(dataloader):
+            x, y = batch
+            # 前向
+            preds = model.forward(x.to(device))  # list of [B] tensors
+            # y[0] 假设是 list of target tensors
+            y_list = y[0]
+            # 计算 raw losses
+            for i, loss_module in enumerate(loss_fn.losses):
+                raw = loss_module(preds[i], y_list[i].to(device))
+                sum_losses[i] += raw.mean().item()  # 按 batch 平均
+            count += 1
+            if count >= warmup_steps:
+                break
 
-    # 4. 打印基本信息
-    print("\n=== 基本信息 ===")
-    print(f"Shape: {df.shape}")
-    print("Columns:", df.columns.tolist())
-
-    # 5. 尝试将列转为数值，记录失败列
-    num_cols = []
-    fail_cols = []
-    for col in df.columns:
-        try:
-            converted = pd.to_numeric(df[col], errors='raise')
-            num_cols.append(col)
-        except Exception:
-            fail_cols.append(col)
-    print(f"\n可转换为数值的列: {len(num_cols)} / {len(df.columns)}")
-    if fail_cols:
-        print("无法转换的列（可能含非数字值或全空）:", fail_cols)
-
-    # 6. 缺失值 & 无穷大值
-    print("\n=== 缺失值统计 ===")
-    print(df.isna().sum()[df.isna().sum() > 0])
-    print("\n=== 无穷大值统计 ===")
-    inf = np.isinf(df.select_dtypes(include=[np.number]))
-    print(df.select_dtypes(include=[np.number]).columns[inf.any()].tolist() or "无无穷大值")
-
-    # 7. 重复行
-    print(f"\n=== 重复行数 === {df.duplicated().sum()}")
-
-    # 8. 数据类型
-    print("\n=== 数据类型 ===")
-    print(df.dtypes)
-
-    # 9. symbol/period 唯一值（如有）
-    for c in ['symbol', 'period']:
-        if c in df.columns:
-            print(f"\nUnique {c}s:", df[c].dropna().unique().tolist())
-
-    # 10. datetime 连续性
-    if 'datetime' in df.columns:
-        print("\n=== datetime 连续性（分组） ===")
-        df['datetime'] = pd.to_datetime(df['datetime'], errors='coerce')
-        for name, grp in df.groupby([c for c in ['symbol','period'] if c in df.columns]):
-            diffs = grp.sort_values('datetime')['datetime'].diff().dt.total_seconds().dropna()
-            if not diffs.empty:
-                print(f"{name}: min={diffs.min()}s, max={diffs.max()}s, mean={diffs.mean():.1f}s")
-
-    # 11. 描述性统计 & 前 N 行预览
-    print("\n=== 描述性统计 (数值列) ===")
-    print(df.describe().T)
-    print(f"\n=== 前 {head_n} 行 ===")
-    print(df.head(head_n))
-
-if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        print("Usage: python check_dataset_v2.py path/to/data.parquet")
-        sys.exit(1)
-    check_dataset(sys.argv[1])
+    raw_means = sum_losses / count
+    return raw_means

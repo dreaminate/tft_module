@@ -32,7 +32,7 @@ def main():
     weight_cfg = load_yaml("configs/weights_config.yaml")
 
     # ===== 数据加载 =====
-    train_loader, val_loader, target_names, train_ds, periods = get_dataloaders(
+    train_loader, val_loader, target_names, train_ds, periods,norm_pack = get_dataloaders(
         data_path=model_cfg["data_path"],
         batch_size=model_cfg.get("batch_size", 64),
         num_workers=model_cfg.get("num_workers", 4),
@@ -45,6 +45,7 @@ def main():
     # ===== 构建模型 =====
     model = MyTFTModule(
         dataset=train_ds,
+        norm_pack=norm_pack,  
         loss_list=get_losses_by_targets(target_names),
         weights=weight_cfg["custom_weights"],
         output_size=[1] * len(target_names),
@@ -82,7 +83,8 @@ def main():
 
     # ===== 训练 =====
     trainer = Trainer(
-        log_every_n_steps=1, 
+        fast_dev_run=True,
+        log_every_n_steps=1,
         max_epochs=model_cfg["max_epochs"],
         accelerator="gpu",
         devices=1,

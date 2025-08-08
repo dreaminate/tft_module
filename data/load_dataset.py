@@ -61,6 +61,13 @@ def get_dataloaders(
     "target_sideway_detect",
     "target_trend_persistence",
     ]
+    regression_targets = [
+    "target_logreturn",
+    "target_logsharpe_ratio",
+    "target_breakout_count",
+    "target_max_drawdown",
+    "target_trend_persistence",
+]
 
 
 
@@ -112,14 +119,39 @@ def get_dataloaders(
 
     symbol_classes = sorted(df_train["symbol"].dropna().unique().tolist())
     period_classes = sorted(df_train["period"].dropna().unique().tolist())
+    sym2idx = {s: i for i, s in enumerate(symbol_classes)}
+    per2idx = {p: i for i, p in enumerate(period_classes)}
 
-    
+    S, P, T = len(symbol_classes), len(period_classes), len(regression_targets)
+    # === 用训练集拟合每个 (symbol, period, target) 的 mean/std ===
+    means = np.zeros((S, P, T), dtype="float32")
+    stds  = np.ones((S, P, T), dtype="float32")  # 避免除零，缺省为 1
+    for (sym, per), g in df_train.groupby(["symbol", "period"]):
+        si, pi = sym2idx[sym], per2idx[per]
+        for ti, col in enumerate(regression_targets):
+            if col in g.columns and len(g[col].dropna()):
+                m = float(g[col].mean())
+                s = float(g[col].std() or 0.0)
+                std_safe = max(s, 1e-8)
+                means[si, pi, ti] = m
+                stds[si, pi, ti]  = std_safe
+        # === 打包给模块使用 ===
+    norm_pack = {
+        "regression_targets": regression_targets,
+        "symbol_classes": symbol_classes,
+        "period_classes": period_classes,
+        "sym2idx": sym2idx,
+        "per2idx": per2idx,
+        "means": means,   # np.float32 [S,P,T]
+        "stds": stds,     # np.float32 [S,P,T]
+    }
 
     symbol_encoder = NaNLabelEncoder(add_nan=True)
     symbol_encoder.fit(pd.Series(symbol_classes))
-
     period_encoder = NaNLabelEncoder(add_nan=True)
     period_encoder.fit(pd.Series(period_classes))
+    
+
     target_normalizer = MultiNormalizer([TorchNormalizer(method="identity", center=False)] * len(targets))
     ts_cfg = dict(
         time_idx="time_idx",
@@ -184,5 +216,6 @@ def get_dataloaders(
         
         drop_last=True,
     )
+    
 
-    return train_loader, val_loader, targets, train_ds, period_classes
+    return train_loader, val_loader, targets, train_ds, period_classes, norm_pack

@@ -353,3 +353,38 @@ def volume_spike_near_support(
     dist_thresh: float = DEFAULTS["distance_thresh"],
 ) -> pd.Series:
     return ((df[vol_rel_col] > vol_thresh) & (df[dist_sup_col] < dist_thresh)).astype(int)
+
+def linear_slope(a: np.ndarray) -> float:
+    n = len(a); x = np.arange(n)
+    xm, ym = x.mean(), np.nanmean(a)
+    denom = ((x - xm)**2).sum()
+    if denom == 0 or np.isnan(ym): return 0.0
+    return float(((x - xm) * (a - ym)).sum() / denom)
+
+def obv_diff(df, col="obv"):
+    return _safe(df[col].diff())
+
+def obv_pct_change(df, col="obv", clip=5.0):
+    return _safe(df[col].pct_change().clip(-clip, clip))
+
+def obv_slope(df, w=14, col="obv"):
+    return _safe(df[col].rolling(w, min_periods=w).apply(linear_slope, raw=True))
+
+def atr_ratio_price(df, atr_col="atr", price_col="close"):
+    return _safe(df[atr_col] / (df[price_col].abs() + 1e-9))
+
+def atr_ratio_range(df, atr_col="atr", high_col="high", low_col="low"):
+    return _safe(df[atr_col] / ((df[high_col]-df[low_col]).abs() + 1e-9))
+
+def atr_change(df, atr_col="atr", clip=2.0):
+    return _safe(df[atr_col].pct_change().clip(-clip, clip))
+
+def range_to_atr(df, high_col="high", low_col="low", atr_col="atr"):
+    return _safe((df[high_col]-df[low_col]) / (df[atr_col] + 1e-9))
+
+def boll_pctb(df, close_col="close", up_col="boll_upper", low_col="boll_lower"):
+    width = (df[up_col] - df[low_col]).abs()
+    return _safe((df[close_col] - df[low_col]) / (width + 1e-9))
+
+def boll_bandwidth(df, ma_col="ma20", up_col="boll_upper", low_col="boll_lower"):
+    return _safe((df[up_col] - df[low_col]) / (df[ma_col].abs() + 1e-9))

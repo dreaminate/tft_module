@@ -34,7 +34,7 @@ def main():
     print(f"🔄 从 checkpoint 续训: {resume_ckpt}")
 
     # ===== 数据加载 =====
-    train_loader, val_loader, target_names, train_ds, periods = get_dataloaders(
+    train_loader, val_loader, target_names, train_ds, periods ,norm_pack= get_dataloaders(
         data_path=model_cfg["data_path"],
         batch_size=model_cfg.get("batch_size", 64),
         num_workers=model_cfg.get("num_workers", 4),
@@ -47,6 +47,7 @@ def main():
     # ===== 构建模型 =====
     model = MyTFTModule.load_from_checkpoint(
         checkpoint_path=resume_ckpt,
+        norm_pack=norm_pack, 
         dataset=train_ds,
         loss_list=get_losses_by_targets(target_names),
         weights=weight_cfg["custom_weights"],
