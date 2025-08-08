@@ -42,11 +42,20 @@ def main():
         val_days=model_cfg.get("val_days", 252),
         val_ratio=model_cfg.get("val_ratio", 0.2),
     )
-    period_map = {i + 1: p for i, p in enumerate(periods)}
-
+    enc = train_ds.categorical_encoders.get("period", None)
+    classes_ = getattr(enc, "classes_", None)
+    if classes_ is not None:
+        period_map = {i: c for i, c in enumerate(classes_)}
+    else:
+        period_map = {i: p for i, p in enumerate(periods)}
+    # ===算有效 steps_per_epoch（考虑梯度累积）===
+    steps_per_epoch = len(train_loader)  # 你这个 DataLoader 一定有 len()
+    accum = int(model_cfg.get("accumulate", 1)) or 1
+    steps_per_epoch_eff = max(1, steps_per_epoch // accum)
     # ===== 构建模型 =====
     model = MyTFTModule.load_from_checkpoint(
         checkpoint_path=resume_ckpt,
+        steps_per_epoch=steps_per_epoch_eff,
         norm_pack=norm_pack, 
         dataset=train_ds,
         loss_list=get_losses_by_targets(target_names),
