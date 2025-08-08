@@ -24,7 +24,7 @@ from indicators import (
 from groupwise_rolling_norm import groupwise_rolling_norm
 
 # 1) 周期
-timeframe = "1h"  # 可用 CLI 覆盖
+timeframe = "1d"  # 可用 CLI 覆盖
 # 2) 指标/流程开关
 enabled = {
     "ma": True, "rsi": True, "macd": True, "kdj": True,
@@ -48,7 +48,7 @@ output_dir = os.path.join(project_root, "data", "crypto_indicated", timeframe)
 os.makedirs(output_dir, exist_ok=True)
 
 # 4) 滑动窗口（按周期）
-tf2win = {"1h": 48, "4h": 48, "1d": 30}
+tf2win = {"1h": 48, "4h": 48, "1d": 48}
 win = tf2win.get(timeframe, 48)
 
 for fname in os.listdir(input_dir):
@@ -96,12 +96,16 @@ for fname in os.listdir(input_dir):
         df["boll_lower"] = lowbb
     if enabled["atr"]:
         df["atr"] = calculate_atr(df, high_col=high_col, low_col=low_col, close_col=close_col)
-        df["adx_scaled"] = df["adx"] / 100.0
+        
     if enabled["cci"]:
         df["cci"] = calculate_cci(df, high_col=high_col, low_col=low_col, close_col=close_col)
-    if enabled["adx"]:
-        adx, pdi, mdi = calculate_adx(df, high_col=high_col, low_col=low_col, close_col=close_col)
-        df["adx"] = adx; df["plus_di"] = pdi; df["minus_di"] = mdi
+    
+    if enabled.get("adx", False):
+        adx, plus_di, minus_di = calculate_adx(df, period=14, high_col="high", low_col="low", close_col="close")
+        df["adx"] = adx
+        df["plus_di"] = plus_di
+        df["minus_di"] = minus_di
+        df["adx_scaled"] = df["adx"] / 100.0
     if enabled["vwap"]:
         df["vwap"] = calculate_vwap(df, column_price=close_col, column_volume=vol_col, high_col=high_col, low_col=low_col)
 
@@ -185,15 +189,36 @@ for fname in os.listdir(input_dir):
                     window=win,
                     methods=["z", "mm"],
                     suffix_policy="with_window",
-                    min_periods=None,       # 默认窗口1/4
+                    min_periods=win,       # 默认窗口1/4
                     eps=1e-7,               # 防止除 0
                     clip_z=5.0,             # Z-score 裁剪 [-5, 5]
                     clip_mm=(0.0, 1.0),     # Min-Max 裁剪 [0, 1]
                 )
 
-            # 可选：限制极端值
-            for c in [x for x in df.columns if x.endswith(f"_zn{win}")]:
+             # 1) 统计归一化后的列（只清这些列的 NaN）
+            zn_cols = [c for c in df.columns if c.endswith(f"_zn{win}")]
+            mm_cols = [c for c in df.columns if c.endswith(f"_mm{win}")]
+            normed_cols = zn_cols + mm_cols
+
+            # 2) 按组裁掉 warm-up（确保 rolling 统计完整）
+            df = df.sort_values(["symbol", "period", "datetime"])
+            df["_row_id"] = df.groupby(["symbol", "period"]).cumcount()
+            before = len(df)
+            df = df[df["_row_id"] >= win].drop(columns="_row_id")
+            after = len(df)
+            print(f"🧹 裁掉 Warm-up 行: {before - after} 条（窗口={win}）")
+
+            # 3) 再把仍然含有 NaN 的行去掉（只检查归一化后的列）
+            if normed_cols:
+                before = len(df)
+                df = df.dropna(subset=normed_cols, how="any")
+                after = len(df)
+                print(f"🧽 归一化列 NaN 清理: 删除 {before - after} 行（检查 {len(normed_cols)} 列）")
+
+            # 4) 可选：限制极端值
+            for c in zn_cols:
                 df[c] = df[c].clip(-5, 5)
+
 
     # === LOF（优先使用 *_zn{win} 列作为输入） ===
     if enabled["lof"]:
@@ -247,3 +272,4 @@ for fname in os.listdir(input_dir):
     print(f"✅ 保存 {out_path}")
 
 print("🎯 指标计算完毕")
+# python src/indicating.py

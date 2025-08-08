@@ -40,11 +40,21 @@ def main():
         val_days=model_cfg.get("val_days", 252),
         val_ratio=model_cfg.get("val_ratio", 0.2),
     )
-    period_map = {idx + 1: p for idx, p in enumerate(periods)}
+    enc = train_ds.categorical_encoders.get("period", None)
+    classes_ = getattr(enc, "classes_", None)
+    if classes_ is not None:
+        period_map = {i: c for i, c in enumerate(classes_)}
+    else:
+        period_map = {i: p for i, p in enumerate(periods)}
+    # ===算有效 steps_per_epoch（考虑梯度累积）===
+    steps_per_epoch = len(train_loader)  # 你这个 DataLoader 一定有 len()
+    accum = int(model_cfg.get("accumulate", 1)) or 1
+    steps_per_epoch_eff = max(1, steps_per_epoch // accum)
 
     # ===== 构建模型 =====
     model = MyTFTModule(
         dataset=train_ds,
+        steps_per_epoch=steps_per_epoch_eff,
         norm_pack=norm_pack,  
         loss_list=get_losses_by_targets(target_names),
         weights=weight_cfg["custom_weights"],
@@ -56,7 +66,7 @@ def main():
         loss_schedule=model_cfg.get("loss_schedule", {}),
         hidden_size=model_cfg["hidden_size"],
         lstm_layers=model_cfg["lstm_layers"],
-        scheduler_cfg=model_cfg.get("scheduler", {}),
+        
         attention_head_size=model_cfg["attention_head_size"],
         dropout=model_cfg["dropout"],
         log_interval=model_cfg.get("log_interval", 100),
@@ -80,15 +90,15 @@ def main():
 
     # 保存配置文件
     yaml.safe_dump(model_cfg, open("logs/configs/model_config.yaml", "w"))
-
+    
     # ===== 训练 =====
     trainer = Trainer(
-        fast_dev_run=True,
+        
         log_every_n_steps=1,
         max_epochs=model_cfg["max_epochs"],
         accelerator="gpu",
         devices=1,
-        precision=model_cfg.get("precision", "16-mixed"),
+        precision=model_cfg.get("precision", "bf16-mixed"),
         gradient_clip_val=model_cfg.get("grad_clip", 0.2),
         accumulate_grad_batches=model_cfg.get("accumulate", 1),
         callbacks=[

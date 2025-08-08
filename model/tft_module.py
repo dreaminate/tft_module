@@ -1,4 +1,5 @@
 import torch
+import math
 import torch.nn as nn
 import torch.nn.functional as F
 from lightning.pytorch import LightningModule
@@ -82,6 +83,7 @@ class MyTFTModule(LightningModule):
         div_factor: float = 25.0,
         final_div_factor: float = 1e4,
         norm_pack: dict | None = None,
+        steps_per_epoch: int | None = None,
         **tft_kwargs,
     ):
         super().__init__()
@@ -93,9 +95,10 @@ class MyTFTModule(LightningModule):
             "pct_start": pct_start,
             "div_factor": div_factor,
             "final_div_factor": final_div_factor,
+            "steps_per_epoch": steps_per_epoch,
         })
         self.target_names = target_names or []
-
+        self.loss_schedule = loss_schedule or {}  
         # —— 回归目标索引 & 统计表 —— #
         self.regression_targets = [
             "target_logreturn",
@@ -123,7 +126,7 @@ class MyTFTModule(LightningModule):
         # —— 构建 TFT —— #
         tft_kwargs.pop("loss", None)
         tft_kwargs.pop("output_size", None)
-        tft_kwargs.pop("scheduler_cfg", None)
+        
         self.model = TemporalFusionTransformer.from_dataset(
             dataset, loss=None, output_size=output_size, **tft_kwargs
         )
@@ -176,14 +179,33 @@ class MyTFTModule(LightningModule):
                 self.close_decoder_idx = dec_reals.index("close")
         except Exception:
             pass
-
+        self._build_loss(loss_list, weights, self.target_names)
     # -------------------- 小工具 --------------------
     def _batch_sym_per_idx(self, x):
         g = x["groups"]  # [B, num_group_ids]
         sym_idx = g[:, self.symbol_group_idx].long()
         per_idx = g[:, self.period_group_idx].long()
         return sym_idx, per_idx
+    def _build_loss(self, loss_list, weights, target_names):
+        # 1) 统一为 ModuleList / Tensor
+        assert isinstance(loss_list, (list, nn.ModuleList)) and len(loss_list) > 0, "loss_list 不能为空"
+        losses = nn.ModuleList(loss_list)
 
+        base_w = torch.as_tensor(weights, dtype=torch.float32).view(-1)
+        assert base_w.numel() == len(losses), f"weights({base_w.numel()}) != losses({len(losses)})"
+
+        # 2) 可读的 loss 名称（与 target_names 对齐更容易看日志）
+        if target_names and len(target_names) == len(losses):
+            loss_names = [f"{t}_loss" for t in target_names]
+        else:
+            loss_names = [f"loss_{i}" for i in range(len(losses))]
+
+        # 3) 真正创建混合损失
+        self.loss_fn = HybridMultiLoss(
+            losses=losses,
+            base_weights=base_w,     # 会被 register_buffer 存成 self.loss_fn.w
+            loss_names=loss_names,
+        )
     def _standardize_y(self, y_enc, sym_idx, per_idx):
         """
         y_enc: [B, T] 原始目标；仅回归列标准化
@@ -422,28 +444,44 @@ class MyTFTModule(LightningModule):
 
     # -------------------- 优化器/调度器 --------------------
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=self.hparams.learning_rate)
+    
+        opt = torch.optim.Adam(self.parameters(), lr=float(self.hparams.learning_rate))
 
-        total_steps = getattr(self.trainer, "estimated_stepping_batches", None)
-        if not isinstance(total_steps, int) or total_steps <= 0:
-            steps_per_epoch = getattr(self.trainer, "num_training_batches", None)
-            if not isinstance(steps_per_epoch, int) or steps_per_epoch <= 0:
-                steps_per_epoch = 1000
-            acc = getattr(self.trainer, "accumulate_grad_batches", 1) or 1
-            max_epochs = getattr(self.trainer, "max_epochs", 1) or 1
-            total_steps = max(1, (steps_per_epoch * max_epochs) // int(acc))
-
-        scheduler = {
-            "scheduler": OneCycleLR(
-                optimizer,
-                max_lr=self.hparams.learning_rate,
-                total_steps=total_steps,
-                pct_start=self.hparams.pct_start,
+        spe = self.hparams.get("steps_per_epoch", None)
+        if isinstance(spe, (int, float)) and math.isfinite(spe) and spe > 0:
+            # ✅ 有 steps_per_epoch：用 epochs + steps_per_epoch（最稳）
+            sched = OneCycleLR(
+                opt,
+                max_lr=float(self.hparams.learning_rate),
+                epochs=int(self.trainer.max_epochs),
+                steps_per_epoch=int(spe),
+                pct_start=float(self.hparams.pct_start),
                 anneal_strategy="cos",
-                div_factor=self.hparams.div_factor,
-                final_div_factor=self.hparams.final_div_factor,
-            ),
-            "interval": "step",
-            "frequency": 1,
-        }
-        return {"optimizer": optimizer, "lr_scheduler": scheduler}
+                div_factor=float(self.hparams.div_factor),
+                final_div_factor=float(self.hparams.final_div_factor),
+            )
+        else:
+            # ❗兜底：算一个有限的 total_steps
+            nb = getattr(self.trainer, "num_training_batches", None)
+            acc = int(getattr(self.trainer, "accumulate_grad_batches", 1)) or 1
+            max_epochs = int(getattr(self.trainer, "max_epochs", 1)) or 1
+
+            if isinstance(nb, (int, float)) and math.isfinite(nb) and nb > 0:
+                total_steps = max(1, (int(nb) // acc) * max_epochs)
+            else:
+                total_steps = int(getattr(self.trainer, "max_steps", 0)) \
+                            or int(getattr(self.trainer, "estimated_stepping_batches", 0)) \
+                            or 1000
+                total_steps = max(1, int(total_steps) // acc)
+
+            sched = OneCycleLR(
+                opt,
+                max_lr=float(self.hparams.learning_rate),
+                total_steps=int(total_steps),
+                pct_start=float(self.hparams.pct_start),
+                anneal_strategy="cos",
+                div_factor=float(self.hparams.div_factor),
+                final_div_factor=float(self.hparams.final_div_factor),
+            )
+
+        return {"optimizer": opt, "lr_scheduler": {"scheduler": sched, "interval": "step", "frequency": 1}}

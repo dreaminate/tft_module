@@ -176,4 +176,4 @@ if __name__ == "__main__":
     print(rep["zn_highcorr_pairs"].head(10) if rep["zn_highcorr_pairs"] is not None else "N/A")
     print("\n=== 组内前64根平均NaN比率（归一化导致） ===")
     print(rep["early_nan_by_group"].head(10))
-    
+    # python src/feature_healthcheck.py

@@ -119,3 +119,4 @@ if __name__ == "__main__":
     selected_periods = ["1d", "1h", "4h"]
     convert_selected_periods_to_csv(INPUT_ROOT, OUTPUT_ROOT, selected_periods)
     print(f"✅ 全部完成，输出目录: {OUTPUT_ROOT}")
+# python src/generate_targets_auto.py

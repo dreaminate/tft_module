@@ -1,6 +1,6 @@
 accumulate: 2
 attention_head_size: 8
-batch_size: 512
+batch_size: 768
 data_path: data/pkl_merged/full_merged.pkl
 dropout: 0.2
 early_stop_patience: 5

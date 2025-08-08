@@ -8,7 +8,7 @@ import numpy as np
 - 仅依赖 Pandas / NumPy；
 - 遇到 inf / NaN 统一用 `_safe` 清洗；
 - 不修改传入 df（无副作用）；
-- 返回 `pd.Series`，与 df 索引对齐。
+- 返回 `pd.Series`（或 tuple），与 df 索引对齐。
 
 默认窗口、阈值可通过 kwargs 覆盖。
 """
@@ -37,42 +37,44 @@ DEFAULTS = {
     "distance_thresh": 0.02,
 }
 
-
 # =========================
 # 工具函数
 # =========================
-
-def _safe(series: pd.Series, fill: float | int = 0):
-    """Replace inf/NaN with given fill value."""
+def _safe(series: pd.Series, fill: float | int = 0) -> pd.Series:
+    """替换 inf / NaN 为给定值（默认 0）"""
     return series.replace([np.inf, -np.inf], np.nan).fillna(fill)
 
+def _rma(s: pd.Series, period: int) -> pd.Series:
+    """Wilder 平滑平均 (RMA)"""
+    return s.ewm(alpha=1/period, adjust=False).mean()
+
+def linear_slope(a: np.ndarray) -> float:
+    """线性回归斜率"""
+    n = len(a)
+    x = np.arange(n)
+    xm, ym = x.mean(), np.nanmean(a)
+    denom = ((x - xm)**2).sum()
+    if denom == 0 or np.isnan(ym):
+        return 0.0
+    return float(((x - xm) * (a - ym)).sum() / denom)
 
 # =========================
 # 技术指标系列
 # =========================
-
-def calculate_ma(df: pd.DataFrame, window: int = DEFAULTS["ma_window_short"], column: str = "close") -> pd.Series:
+def calculate_ma(df, window=DEFAULTS["ma_window_short"], column="close"):
     return _safe(df[column].rolling(window=window).mean())
 
-
-def calculate_rsi(df: pd.DataFrame, period: int = DEFAULTS["rsi_period"], column: str = "close") -> pd.Series:
+def calculate_rsi(df, period=DEFAULTS["rsi_period"], column="close"):
     delta = df[column].diff()
     gain = delta.where(delta > 0, 0)
     loss = -delta.where(delta < 0, 0)
     avg_gain = gain.rolling(window=period, min_periods=1).mean()
     avg_loss = loss.rolling(window=period, min_periods=1).mean()
-    rs = avg_gain / (avg_loss.replace(0, 1e-10))
-    rsi = 100 - (100 / (1 + rs))
-    return _safe(rsi)
+    rs = avg_gain / avg_loss.replace(0, 1e-10)
+    return _safe(100 - (100 / (1 + rs)))
 
-
-def calculate_macd(
-    df: pd.DataFrame,
-    short_window: int = DEFAULTS["macd_short"],
-    long_window: int = DEFAULTS["macd_long"],
-    signal_window: int = DEFAULTS["macd_signal"],
-    column: str = "close",
-):
+def calculate_macd(df, short_window=DEFAULTS["macd_short"], long_window=DEFAULTS["macd_long"],
+                   signal_window=DEFAULTS["macd_signal"], column="close"):
     ema_short = df[column].ewm(span=short_window, adjust=False).mean()
     ema_long = df[column].ewm(span=long_window, adjust=False).mean()
     macd_line = _safe(ema_short - ema_long)
@@ -80,14 +82,7 @@ def calculate_macd(
     macd_hist = _safe(macd_line - macd_signal)
     return macd_line, macd_signal, macd_hist
 
-
-def calculate_kdj(
-    df: pd.DataFrame,
-    period: int = DEFAULTS["kdj_period"],
-    column: str = "close",
-    high_col: str = "high",
-    low_col: str = "low",
-):
+def calculate_kdj(df, period=DEFAULTS["kdj_period"], column="close", high_col="high", low_col="low"):
     low_min = df[low_col].rolling(window=period, min_periods=1).min()
     high_max = df[high_col].rolling(window=period, min_periods=1).max()
     rsv = (df[column] - low_min) / (high_max - low_min).replace(0, np.nan) * 100
@@ -96,111 +91,68 @@ def calculate_kdj(
     j = 3 * k - 2 * d
     return _safe(k), _safe(d), _safe(j)
 
-
-def calculate_momentum(df: pd.DataFrame, period: int = DEFAULTS["momentum_period"], column: str = "close") -> pd.Series:
+def calculate_momentum(df, period=DEFAULTS["momentum_period"], column="close"):
     return _safe(df[column] - df[column].shift(period))
 
-
-def calculate_vol_ma(df: pd.DataFrame, window: int = DEFAULTS["ma_window_short"], column: str = "volume") -> pd.Series:
+def calculate_vol_ma(df, window=DEFAULTS["ma_window_short"], column="volume"):
     return _safe(df[column].rolling(window=window).mean())
 
+def calculate_vol_change(df, column="volume", clip_limit=5.0):
+    return _safe(df[column].pct_change().clip(-clip_limit, clip_limit))
 
-def calculate_vol_change(df: pd.DataFrame, column: str = "volume", clip_limit: float = 5.0) -> pd.Series:
-    change = df[column].pct_change().clip(lower=-clip_limit, upper=clip_limit)
-    return _safe(change)
-
-
-def calculate_obv(df: pd.DataFrame, column_price: str = "close", column_volume: str = "volume") -> pd.Series:
+def calculate_obv(df, column_price="close", column_volume="volume"):
     direction = np.sign(df[column_price].diff()).fillna(0)
-    obv = (direction * df[column_volume]).cumsum()
-    return _safe(obv)
+    return _safe((direction * df[column_volume]).cumsum())
 
-
-def calculate_bollinger(df: pd.DataFrame, period: int = DEFAULTS["boll_period"], column: str = "close"):
+def calculate_bollinger(df, period=DEFAULTS["boll_period"], column="close"):
     ma = _safe(df[column].rolling(window=period).mean())
     std = df[column].rolling(window=period).std()
-    upper = _safe(ma + 2 * std)
-    lower = _safe(ma - 2 * std)
-    return ma, upper, lower
+    return ma, _safe(ma + 2 * std), _safe(ma - 2 * std)
 
+def calculate_atr(df, period=DEFAULTS["atr_period"], high_col="high", low_col="low", close_col="close"):
+    tr = pd.concat([
+        df[high_col] - df[low_col],
+        (df[high_col] - df[close_col].shift()).abs(),
+        (df[low_col] - df[close_col].shift()).abs(),
+    ], axis=1).max(axis=1)
+    return _safe(tr.rolling(window=period, min_periods=1).mean())
 
-def calculate_atr(
-    df: pd.DataFrame,
-    period: int = DEFAULTS["atr_period"],
-    high_col: str = "high",
-    low_col: str = "low",
-    close_col: str = "close",
-) -> pd.Series:
-    tr = pd.concat(
-        [
-            df[high_col] - df[low_col],
-            (df[high_col] - df[close_col].shift()).abs(),
-            (df[low_col] - df[close_col].shift()).abs(),
-        ],
-        axis=1,
-    ).max(axis=1)
-    atr = tr.rolling(window=period, min_periods=1).mean()
-    return _safe(atr)
-
-
-def calculate_cci(
-    df: pd.DataFrame,
-    period: int = DEFAULTS["cci_period"],
-    high_col: str = "high",
-    low_col: str = "low",
-    close_col: str = "close",
-) -> pd.Series:
+def calculate_cci(df, period=DEFAULTS["cci_period"], high_col="high", low_col="low", close_col="close"):
     tp = (df[high_col] + df[low_col] + df[close_col]) / 3
     sma = tp.rolling(window=period, min_periods=1).mean()
     mad = tp.rolling(window=period, min_periods=1).apply(lambda x: np.mean(np.abs(x - x.mean())), raw=True)
-    cci = (tp - sma) / (0.015 * mad + 1e-10)
-    return _safe(cci)
+    return _safe((tp - sma) / (0.015 * mad + 1e-10))
 
-
-def calculate_adx(
-    df: pd.DataFrame,
-    period: int = DEFAULTS["adx_period"],
-    high_col: str = "high",
-    low_col: str = "low",
-    close_col: str = "close",
-):
+def calculate_adx(df, period=DEFAULTS["adx_period"], high_col="high", low_col="low", close_col="close"):
+    idx = df.index
     up_move = df[high_col].diff()
     down_move = df[low_col].shift() - df[low_col]
-
     plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0.0)
     minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0.0)
 
-    tr = pd.concat(
-        [
-            df[high_col] - df[low_col],
-            (df[high_col] - df[close_col].shift()).abs(),
-            (df[low_col] - df[close_col].shift()).abs(),
-        ],
-        axis=1,
-    ).max(axis=1)
+    tr = pd.concat([
+        df[high_col] - df[low_col],
+        (df[high_col] - df[close_col].shift()).abs(),
+        (df[low_col] - df[close_col].shift()).abs(),
+    ], axis=1).max(axis=1)
 
-    atr = tr.rolling(period).mean()
-    plus_di = 100 * pd.Series(plus_dm).ewm(alpha=1 / period).mean() / (atr + 1e-10)
-    minus_di = 100 * pd.Series(minus_dm).ewm(alpha=1 / period).mean() / (atr + 1e-10)
-    dx = 100 * (np.abs(plus_di - minus_di) / (plus_di + minus_di + 1e-10))
-    adx = _safe(pd.Series(dx).ewm(alpha=1 / period).mean())
-    return adx, _safe(plus_di), _safe(minus_di)
+    atr = _rma(tr, period)
+    plus_di = 100.0 * _rma(pd.Series(plus_dm, index=idx), period) / (atr + 1e-10)
+    minus_di = 100.0 * _rma(pd.Series(minus_dm, index=idx), period) / (atr + 1e-10)
 
+    dx = 100.0 * (plus_di.sub(minus_di).abs() / (plus_di.add(minus_di) + 1e-10))
+    adx = _rma(dx, period)
 
-def calculate_vwap(
-    df: pd.DataFrame,
-    period: int | None = None,
-    column_price: str = "close",
-    column_volume: str = "volume",
-    high_col: str = "high",
-    low_col: str = "low",
-):
-    """Return VWAP series (rolling if period provided)."""
+    return (
+        _safe(adx).clip(0, 100).astype("float32"),
+        _safe(plus_di).clip(0, 100).astype("float32"),
+        _safe(minus_di).clip(0, 100).astype("float32")
+    )
+
+def calculate_vwap(df, period=None, column_price="close", column_volume="volume", high_col="high", low_col="low"):
     tp = (df[high_col] + df[low_col] + df[column_price]) / 3
     if period is None:
-        pv = (tp * df[column_volume]).cumsum()
-        v = df[column_volume].cumsum()
-        return _safe(pv / v)
+        return _safe((tp * df[column_volume]).cumsum() / df[column_volume].cumsum())
     pv = (tp * df[column_volume]).rolling(window=period, min_periods=1).sum()
     v = df[column_volume].rolling(window=period, min_periods=1).sum()
     return _safe(pv / v)

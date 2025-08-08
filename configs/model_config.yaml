@@ -7,7 +7,7 @@ warm_start_ckpt: checkpoints/best.ckpt
 val_mode: ratio
 val_days: 14     # 若 val_mode = "days"
 val_ratio: 0.2   # 若 val_mode = "ratio"
-batch_size: 512
+batch_size: 768
 num_workers: 15
 hidden_size: 192
 lstm_layers: 2
