@@ -8,7 +8,7 @@ from datetime import datetime
 # ====================== 配置区 ======================
 BASE_SYMBOLS   = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'BNB/USDT', 'ADA/USDT']
 TIMEFRAMES     = ['1h', '4h', '1d']
-SINCE_STR      = '2020-09-15T00:00:00Z'
+SINCE_STR      = '2020-10-01T00:00:00Z'
 LIMIT          = 1500
 CHUNK_FLUSH    = 20000
 PRICE_MODE     = 'trade'   # 'trade' | 'mark' | 'index'

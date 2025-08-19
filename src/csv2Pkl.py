@@ -4,7 +4,7 @@ import pandas as pd
 from pathlib import Path
 
 # === 配置路径 ===
-SRC_FILE = Path("data/merged/full_merged.csv")      # 要转换的 CSV 文件
+SRC_FILE = Path("data/merged/full_merged.pruned.csv")      # 要转换的 CSV 文件
 DST_FILE = Path("data/pkl_merged/full_merged.pkl")  # 输出 pkl 文件路径
 SELECTED_PERIODS = ["1h", "4h", "1d"]  # 你想保留的周期，None 表示不过滤
 

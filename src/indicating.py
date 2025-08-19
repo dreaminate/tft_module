@@ -24,7 +24,7 @@ from indicators import (
 from groupwise_rolling_norm import groupwise_rolling_norm
 
 # 1) 周期
-timeframe = "1d"  # 可用 CLI 覆盖
+timeframe = "1h"  # 可用 CLI 覆盖
 # 2) 指标/流程开关
 enabled = {
     "ma": True, "rsi": True, "macd": True, "kdj": True,

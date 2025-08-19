@@ -125,6 +125,7 @@ def fetch_funding_rate(
                 df[c] = pd.to_numeric(df[c], errors="coerce")
         df["symbol"] = symbol
         df["period"] = interval
+        df["symbol"] = symbol+"_USDT"
         return df.sort_values("timestamp")
     def _fetch_accumulated(path: str) -> pd.DataFrame:
         url = BASE + path
@@ -191,9 +192,10 @@ def fetch_funding_rate(
         os.makedirs(out_dir_accum, exist_ok=True)
         accum_path = os.path.join(out_dir_accum, f"Agg_ALL_{ranged}.csv")
         df_accum.to_csv(accum_path, index=False, encoding="utf-8-sig")
+        return df_oi, df_vol, df_accum, {"oi": oi_path, "volume": vol_path, "accumulated": accum_path}
     else:
         print(f"⚠️ Skipped accumulated funding rate for ALL at {ranged} interval.")
-    return df_oi, df_vol, df_accum, {"oi": oi_path, "volume": vol_path, "accumulated": accum_path}
+        return df_oi, df_vol,  {"oi": oi_path, "volume": vol_path}
 def accum_as_of(symbol="BTC", interval="4h", window="7d",
                 kind="oi",  # "oi" 或 "volume"
                 asof=None,
@@ -220,7 +222,7 @@ def accum_as_of(symbol="BTC", interval="4h", window="7d",
 # print(a[1].head())
 def long_short_account_ratio(
     symbol: str,            # 例如: "BTCUSDT"
-    exchange: str,          # 例如: "Binance" / "OKX"
+    exchange: str = "Binance",          # 例如: "Binance" / "OKX"
     interval: str = "4h",
     limit: int = 1000,
     start_time: Optional[int] = None,   # ms
@@ -273,26 +275,7 @@ def long_short_account_ratio(
                 if str(payload.get("code")) == "0":
                     df = pd.DataFrame(payload.get("data", []))
                     # 统一列名
-                    ren = {
-                            # v4: Global Account
-                            "global_account_long_percent": "long_percent",
-                            "global_account_short_percent": "short_percent",
-                            "global_account_long_short_ratio": "long_short_ratio",
-                            # v4: Top Account
-                            "top_account_long_percent": "long_percent",
-                            "top_account_short_percent": "short_percent",
-                            "top_account_long_short_ratio": "long_short_ratio",
-                            # v4: Top Position
-                            "top_position_long_percent": "long_percent",
-                            "top_position_short_percent": "short_percent",
-                            "top_position_long_short_ratio": "long_short_ratio",
-                           
-                        }
-                    for k, v in ren.items():
-                        if k in df.columns: df[v] = pd.to_numeric(df[k], errors="coerce")
-                    if "time" in df.columns:
-                        df["time"] = pd.to_datetime(pd.to_numeric(df["time"], errors="coerce"), unit="ms", utc=True)
-                        df = df[["time","long_percent","short_percent","long_short_ratio"]].sort_values("time")
+                    df.rename(columns={"time": "timestamp"}, inplace=True)
                     return df
                 last_payload = payload
             except requests.HTTPError:
@@ -328,7 +311,8 @@ def long_short_account_ratio(
         df_top_pos.to_csv(paths["top_position"], index=False, encoding="utf-8-sig")
 
     return df_global, df_top_acc, df_top_pos, paths
-# long_short_account_ratio(symbol="BTCUSDT",exchange="Binance",interval="4h",limit=1000,start_time = 1641513600000)
+# a,b,c,d=long_short_account_ratio(symbol="BTCUSDT",exchange="Binance",interval="4h",limit=1000,start_time = 1641513600000)
+# print(a.head())
 def fetch_oi(
     symbol: str,
     interval: str = "4h",
@@ -367,18 +351,13 @@ def fetch_oi(
     
     # --- 解析为规范 DataFrame ---
     df = pd.DataFrame(payload["data"])
-    if "time" in df.columns:
-        df["timestamp"] = pd.to_datetime(df["time"], unit="ms", utc=True)
-    else:
-        df["timestamp"] = pd.NaT
-
     for c in ("open", "high", "low", "close"):
         if c in df.columns:
-            df[c] = pd.to_numeric(df[c], errors="coerce")
+            df[c+"_oi"] = pd.to_numeric(df[c], errors="coerce")
 
-    df["symbol"] = symbol
+    df["symbol"] = symbol+"_USDT"
     df["period"] = interval
-
+    df.rename(columns={"time": "timestamp"}, inplace=True)
     df = df.sort_values(["symbol", "period", "timestamp"]).reset_index(drop=True)
     
     # === 子函数：添加 OI 特征（变化率、ATR-like 波动率、rolling 标准化） ===
@@ -427,17 +406,22 @@ def fetch_oi(
 
         # 起始段填NaN
         _df[["oi_logret", "oi_vol", "oi_mean_oc_z"]] = _df[["oi_logret", "oi_vol", "oi_mean_oc_z"]].fillna(np.nan)
+        
         return _df
 
     df = _add_oi_features(df, interval)
 
+
+    df.drop(columns=["high","low","close","open"], inplace=True, errors="ignore")
+
     # --- 保存 CSV ---
     os.makedirs(base_dir, exist_ok=True)
-    out_path = os.path.join(base_dir, f"{symbol}_{interval}.csv")
+    out_path = os.path.join(base_dir, f"{symbol}_USDT_{interval}.csv")
     df.to_csv(out_path, index=False)
 
     return df
-# fetch_oi(symbol="BTC", interval="1d", limit=1000, start_time=1641513600000)
+# a=fetch_oi(symbol="BTC", interval="1d", limit=1000, start_time=1641513600000)
+# print(a.head())
 def taker_buy_sell_volume(
        
         symbol: str,
@@ -446,7 +430,7 @@ def taker_buy_sell_volume(
         start_time: int,
         end_time: int,
         *,
-        exchange: str = "binance",
+        exchange: str = "Binance",
         standardize: bool = True,
         method: str = "zscore_rolling",     # "zscore_rolling" | "robust_rolling" | "minmax_rolling"
         window: int | None = None,          # None 时按 interval 自动推断
@@ -532,18 +516,18 @@ def taker_buy_sell_volume(
 # a = taker_buy_sell_volume("BTCUSDT", "1h", 1000, 1751385600000, 1754982000000)
 # print(a[["timestamp", "datetime"]].head())
 def premium_index(
-        interval: str = "4h",
+        interval: str = "1d",
         limit: int = 1000,
-        startTime: int | None = None,
-        endTime: int | None = None
+        start_time: int | None = None,
+        end_time: int | None = None
 ) -> pd.DataFrame:
     headers = {"accept": "application/json", "CG-API-KEY": API_KEY}
     url = BASE + "/api/coinbase-premium-index"
     params = {
         "interval": interval,
         "limit": limit,
-        "start_time": startTime,
-        "end_time": endTime
+        "start_time": start_time,
+        "end_time": end_time
     }
     resp = requests.get(url, headers=headers, params=params)
     resp.raise_for_status()
@@ -558,6 +542,7 @@ def premium_index(
         df["timestamp"] = (df["timestamp"] * 1000).astype("int64")  # 统一成“毫秒”
     df["datetime"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
     df["period"] = interval
+    df = df.drop(columns=["price"], errors="ignore")
     os.makedirs("data/cglass/index", exist_ok=True)
     df.to_csv("data/cglass/index/premium-index.csv", index=False)
     return df
@@ -676,8 +661,10 @@ def fetch_margin_long_short(
             raise RuntimeError(f"API error: code={payload['code']}, msg={payload.get('msg')}")
 
         df = pd.DataFrame(payload["data"])
+        # df["timestamp"] = pd.to_numeric(df["time"], errors="coerce")
+        # df.drop(columns=["time"], inplace=True, errors="ignore")
         os.makedirs("data/cglass/index", exist_ok=True)
-        df.to_csv("data/cglass/index/bitfinex_margin_long_short.csv", index=False)
+        df.to_csv(f"data/cglass/index/bitfinex_margin_long_short-{symbol}-{interval}.csv", index=False)
         return df
 # a = fetch_margin_long_short(start_time=1641522717000)
 # print(a.head())
@@ -706,8 +693,10 @@ def fetch_borrow_interest_rate(
         raise RuntimeError(f"API error: code={payload['code']}, msg={payload.get('msg')}")
 
     df = pd.DataFrame(payload["data"])
+    df["timestamp"] = pd.to_numeric(df["time"], errors="coerce")
+    df.drop(columns=["time"], inplace=True, errors="ignore")
     os.makedirs("data/cglass/index", exist_ok=True)
-    df.to_csv("data/cglass/index/borrow_interest_rate.csv", index=False)
+    df.to_csv(f"data/cglass/index/borrow_interest_rate-{exchange}-{symbol}-{interval}.csv", index=False)
     return df
 # a = fetch_borrow_interest_rate()
 # print(a.head())
@@ -722,6 +711,7 @@ def fetch_puell_multiple() -> pd.DataFrame:
         raise RuntimeError(f"API error: code={payload['code']}, msg={payload.get('msg')}")
 
     df = pd.DataFrame(payload["data"])
+    df = df.drop(columns=["price"], errors="ignore")
     os.makedirs("data/cglass/index", exist_ok=True)
     df.to_csv("data/cglass/index/puell_multiple.csv", index=False)
     return df
@@ -738,6 +728,7 @@ def fetch_stock_flow() -> pd.DataFrame:
         raise RuntimeError(f"API error: code={payload['code']}, msg={payload.get('msg')}")
 
     df = pd.DataFrame(payload["data"])
+    df = df.drop(columns=["price"], errors="ignore")
     os.makedirs("data/cglass/index", exist_ok=True)
     df.to_csv("data/cglass/index/stock_flow.csv", index=False)
     return df
@@ -754,6 +745,7 @@ def fetch_pi_cycle_indicator() -> pd.DataFrame:
         raise RuntimeError(f"API error: code={payload['code']}, msg={payload.get('msg')}")
 
     df = pd.DataFrame(payload["data"])
+    df = df.drop(columns=["price"], errors="ignore")
     os.makedirs("data/cglass/index", exist_ok=True)
     df.to_csv("data/cglass/index/pi_cycle_indicator.csv", index=False)
     return df
@@ -770,6 +762,7 @@ def fetch_golden_ratio_multiplier() -> pd.DataFrame:
         raise RuntimeError(f"API error: code={payload['code']}, msg={payload.get('msg')}")
 
     df = pd.DataFrame(payload["data"])
+    df = df.drop(columns=["price"], errors="ignore")
     os.makedirs("data/cglass/index", exist_ok=True)
     df.to_csv("data/cglass/index/golden_ratio_multiplier.csv", index=False)
     return df
@@ -786,6 +779,7 @@ def fetch_profitable_days() -> pd.DataFrame:
         raise RuntimeError(f"API error: code={payload['code']}, msg={payload.get('msg')}")
 
     df = pd.DataFrame(payload["data"])
+    df = df.drop(columns=["price"], errors="ignore")
     os.makedirs("data/cglass/index/bitcoin", exist_ok=True)
     df.to_csv("data/cglass/index/bitcoin/profitable_days.csv", index=False)
     return df
@@ -802,6 +796,20 @@ def fetch_rainbow_chart() -> pd.DataFrame:
         raise RuntimeError(f"API error: code={payload['code']}, msg={payload.get('msg')}")
 
     df = pd.DataFrame(payload["data"])
+    df["timestamp"] = df[11]
+    df["lowest"] = df[1]
+    df["first"]=df[2]
+    df["second"] = df[3]
+    df["third"] = df[4]
+    df["fourth"] = df[5]
+    df["fifth"] = df[6]
+    df["sixth"] = df[7]
+    df["seventh"] = df[8]
+    df["eighth"] = df[9]
+    df["ninth"] = df[10]
+    df.drop(columns=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10], inplace=True, errors="ignore")
+    df.drop(columns=[11], inplace=True, errors="ignore")
+    df.drop(columns=[0], inplace=True, errors="ignore")
     os.makedirs("data/cglass/index/bitcoin", exist_ok=True)
     df.to_csv("data/cglass/index/bitcoin/rainbow_chart.csv", index=False)
     return df
@@ -878,7 +886,7 @@ def fetch_stableCoin_marketCap_history() -> pd.DataFrame:
         "price": price_series.values,
         "total": sum_series.values,
     })
-
+    df = df.drop(columns=["price"], errors="ignore")
     os.makedirs("data/cglass/index", exist_ok=True)
     df.to_csv("data/cglass/index/stableCoin-marketCap-history.csv", index=False)
     return df
@@ -895,6 +903,7 @@ def fetch_bubble_index() -> pd.DataFrame:
         raise RuntimeError(f"API error: code={payload['code']}, msg={payload.get('msg')}")
 
     df = pd.DataFrame(payload["data"])
+    df = df.drop(columns=["price"], errors="ignore")
     df["timestamp"]  = pd.to_datetime(df["date_string"], utc=True, errors="coerce").astype("int64") // 10**6
     os.makedirs("data/cglass/index/bitcoin", exist_ok=True)
     df.to_csv("data/cglass/index/bitcoin/bubble_index.csv", index=False)
@@ -912,7 +921,7 @@ def fetch_altcoin_season() -> pd.DataFrame:
         raise RuntimeError(f"API error: code={payload['code']}, msg={payload.get('msg')}")
 
     df = pd.DataFrame(payload["data"])
-    
+    df = df.drop(columns=["price"], errors="ignore")
     os.makedirs("data/cglass/index/altcoin", exist_ok=True)
     df.to_csv("data/cglass/index/altcoin-season.csv", index=False)
     return df
@@ -929,7 +938,7 @@ def fetch_bitcoin_sth_sopr() -> pd.DataFrame:
         raise RuntimeError(f"API error: code={payload['code']}, msg={payload.get('msg')}")
 
     df = pd.DataFrame(payload["data"])
-    
+    df = df.drop(columns=["price"], errors="ignore")
     os.makedirs("data/cglass/index", exist_ok=True)
     df.to_csv("data/cglass/index/bitcoin-sth_sopr.csv", index=False)
     return df
@@ -946,7 +955,7 @@ def fetch_bitcoin_lth_sopr()-> pd.DataFrame:
         raise RuntimeError(f"API error: code={payload['code']}, msg={payload.get('msg')}")
 
     df = pd.DataFrame(payload["data"])
-    
+    df = df.drop(columns=["price"], errors="ignore")
     os.makedirs("data/cglass/index", exist_ok=True)
     df.to_csv("data/cglass/index/bitcoin-lth_sopr.csv", index=False)
     return df
@@ -963,7 +972,7 @@ def fetch_bitcoin_sth_realized_price() -> pd.DataFrame:
         raise RuntimeError(f"API error: code={payload['code']}, msg={payload.get('msg')}")
 
     df = pd.DataFrame(payload["data"])
-    
+    df = df.drop(columns=["price"], errors="ignore")
     os.makedirs("data/cglass/index", exist_ok=True)
     df.to_csv("data/cglass/index/bitcoin-sth_realized_price.csv", index=False)
     return df
@@ -980,7 +989,7 @@ def fetch_bitcoin_lth_realized_price() -> pd.DataFrame:
         raise RuntimeError(f"API error: code={payload['code']}, msg={payload.get('msg')}")
 
     df = pd.DataFrame(payload["data"])
-
+    df = df.drop(columns=["price"], errors="ignore")
     os.makedirs("data/cglass/index", exist_ok=True)
     df.to_csv("data/cglass/index/bitcoin-lth_realized_price.csv", index=False)
     return df
@@ -997,7 +1006,7 @@ def fetch_bitcoin_short_term_holder_supply() -> pd.DataFrame:
         raise RuntimeError(f"API error: code={payload['code']}, msg={payload.get('msg')}")
 
     df = pd.DataFrame(payload["data"])
-
+    df = df.drop(columns=["price"], errors="ignore")
     os.makedirs("data/cglass/index", exist_ok=True)
     df.to_csv("data/cglass/index/bitcoin-short_term_holder_supply.csv", index=False)
     return df
@@ -1014,7 +1023,7 @@ def fetch_bitcoin_long_term_holder_supply() -> pd.DataFrame:
         raise RuntimeError(f"API error: code={payload['code']}, msg={payload.get('msg')}")
 
     df = pd.DataFrame(payload["data"])
-
+    df = df.drop(columns=["price"], errors="ignore")
     os.makedirs("data/cglass/index", exist_ok=True)
     df.to_csv("data/cglass/index/bitcoin-long_term_holder_supply.csv", index=False)
     return df
@@ -1031,7 +1040,7 @@ def fetch_bitcoin_rhodl_ratio() ->pd.DataFrame:
         raise RuntimeError(f"API error: code={payload['code']}, msg={payload.get('msg')}")
 
     df = pd.DataFrame(payload["data"])
-
+    df = df.drop(columns=["price"], errors="ignore")
     os.makedirs("data/cglass/index", exist_ok=True)
     df.to_csv("data/cglass/index/bitcoin-rhodl_ratio.csv", index=False)
     return df
@@ -1048,7 +1057,7 @@ def fetch_bitcoin_new_addresses() ->pd.DataFrame:
         raise RuntimeError(f"API error: code={payload['code']}, msg={payload.get('msg')}")
 
     df = pd.DataFrame(payload["data"])
-
+    df = df.drop(columns=["price"], errors="ignore")
     os.makedirs("data/cglass/index", exist_ok=True)
     df.to_csv("data/cglass/index/bitcoin-new_addresses.csv", index=False)
     return df
@@ -1065,7 +1074,7 @@ def fetch_bitcoin_active_addresses() -> pd.DataFrame:
         raise RuntimeError(f"API error: code={payload['code']}, msg={payload.get('msg')}")
 
     df = pd.DataFrame(payload["data"])
-
+    df = df.drop(columns=["price"], errors="ignore")
     os.makedirs("data/cglass/index", exist_ok=True)
     df.to_csv("data/cglass/index/bitcoin-active_addresses.csv", index=False)
     return df
@@ -1082,7 +1091,7 @@ def fetch_bitcoin_reserve_risk() -> pd.DataFrame:
         raise RuntimeError(f"API error: code={payload['code']}, msg={payload.get('msg')}")
 
     df = pd.DataFrame(payload["data"])
-
+    df = df.drop(columns=["price"], errors="ignore")
     os.makedirs("data/cglass/index", exist_ok=True)
     df.to_csv("data/cglass/index/bitcoin-reserve_risk.csv", index=False)
     return df
@@ -1099,7 +1108,7 @@ def fetch_bitcoin_net_unrealized_profit_loss() -> pd.DataFrame:
         raise RuntimeError(f"API error: code={payload['code']}, msg={payload.get('msg')}")
 
     df = pd.DataFrame(payload["data"])
-
+    df = df.drop(columns=["price"], errors="ignore")
     os.makedirs("data/cglass/index", exist_ok=True)
     df.to_csv("data/cglass/index/bitcoin-net_unrealized_profit_loss.csv", index=False)
     return df
@@ -1116,7 +1125,7 @@ def fetch_bitcoin_correlation() -> pd.DataFrame:
         raise RuntimeError(f"API error: code={payload['code']}, msg={payload.get('msg')}")
 
     df = pd.DataFrame(payload["data"])
-
+    df = df.drop(columns=["price"], errors="ignore")
     os.makedirs("data/cglass/index", exist_ok=True)
     df.to_csv("data/cglass/index/bitcoin-correlation.csv", index=False)
     return df
@@ -1133,7 +1142,7 @@ def fetch_bitcoin_macro_oscillator() -> pd.DataFrame:
         raise RuntimeError(f"API error: code={payload['code']}, msg={payload.get('msg')}")
 
     df = pd.DataFrame(payload["data"])
-
+    df = df.drop(columns=["price"], errors="ignore")
     os.makedirs("data/cglass/index", exist_ok=True)
     df.to_csv("data/cglass/index/bitcoin-macro_oscillator.csv", index=False)
     return df
@@ -1150,7 +1159,7 @@ def fetch_bitcoin_vs_global_m2_growth() -> pd.DataFrame:
         raise RuntimeError(f"API error: code={payload['code']}, msg={payload.get('msg')}")
 
     df = pd.DataFrame(payload["data"])
-
+    df = df.drop(columns=["price"], errors="ignore")
     os.makedirs("data/cglass/index", exist_ok=True)
     df.to_csv("data/cglass/index/bitcoin-vs-global-m2-growth.csv", index=False)
     return df
@@ -1167,7 +1176,7 @@ def fetch_bitcoin_vs_us_m2_growth() -> pd.DataFrame:
         raise RuntimeError(f"API error: code={payload['code']}, msg={payload.get('msg')}")
 
     df = pd.DataFrame(payload["data"])
-
+    df = df.drop(columns=["price"], errors="ignore")
     os.makedirs("data/cglass/index", exist_ok=True)
     df.to_csv("data/cglass/index/bitcoin-vs-us-m2-growth.csv", index=False)
     return df
@@ -1184,7 +1193,7 @@ def fetch_bitcoin_dominance() -> pd.DataFrame:
         raise RuntimeError(f"API error: code={payload['code']}, msg={payload.get('msg')}")
 
     df = pd.DataFrame(payload["data"])
-
+    df = df.drop(columns=["price"], errors="ignore")
     os.makedirs("data/cglass/index", exist_ok=True)
     df.to_csv("data/cglass/index/bitcoin-dominance.csv", index=False)
     return df
@@ -1217,9 +1226,10 @@ def fetch_futures_basis(
         raise RuntimeError(f"API error: code={payload['code']}, msg={payload.get('msg')}")
 
     df = pd.DataFrame(payload["data"])
-
+    df["timestamp"] = df["time"]
+    df.drop(columns=["time"], inplace=True, errors="ignore")
     os.makedirs("data/cglass/futures", exist_ok=True)
-    df.to_csv("data/cglass/futures/futures-basis.csv", index=False)
+    df.to_csv(f"data/cglass/futures/futures-basis-{exchange}-{symbol}-{interval}.csv", index=False)
     return df
 # a = fetch_futures_basis()
 # print(a.head())
@@ -1250,9 +1260,11 @@ def fetch_whale_index(
         raise RuntimeError(f"API error: code={payload['code']}, msg={payload.get('msg')}")
 
     df = pd.DataFrame(payload["data"])
-
+    df = df.drop(columns=["price"], errors="ignore")
+    df["timestamp"] = df["time"]
+    df.drop(columns=["time"], inplace=True, errors="ignore")
     os.makedirs("data/cglass/futures", exist_ok=True)
-    df.to_csv("data/cglass/futures/futures-whale-index.csv", index=False)
+    df.to_csv(f"data/cglass/futures/whale-index-{exchange}-{symbol}-{interval}.csv", index=False)
     return df
 # a = fetch_whale_index()
 # print(a.head())
@@ -1265,7 +1277,7 @@ def fetch_cgdi_index(
         end_time : Optional[int] = None
     )   ->pd.DataFrame:
     headers = {"accept": "application/json", "CG-API-KEY": API_KEY}
-    url = BASE + "/api/futures/cgdi-index/history"
+    url = BASE + f"/api/futures/cgdi-index/history"
 
     params = {
         "exchange": exchange,
@@ -1283,9 +1295,11 @@ def fetch_cgdi_index(
         raise RuntimeError(f"API error: code={payload['code']}, msg={payload.get('msg')}")
 
     df = pd.DataFrame(payload["data"])
-
+    df = df.drop(columns=["price"], errors="ignore")
+    df["timestamp"] = df["time"]
+    df.drop(columns=["time"], inplace=True, errors="ignore")
     os.makedirs("data/cglass/futures", exist_ok=True)
-    df.to_csv("data/cglass/futures/futures-cgdi.csv", index=False)
+    df.to_csv(f"data/cglass/futures/futures-cgdi-{exchange}-{symbol}-{interval}.csv", index=False)
     return df
 # a = fetch_cgdi_index()
 # print(a.head())
@@ -1298,7 +1312,7 @@ def fetch_cdri_index(
         end_time : Optional[int] = None
     )   ->pd.DataFrame:
     headers = {"accept": "application/json", "CG-API-KEY": API_KEY}
-    url = BASE + "/api/futures/cdri-index/history"
+    url = BASE + f"/api/futures/cdri-index/history"
 
     params = {
         "exchange": exchange,
@@ -1316,9 +1330,11 @@ def fetch_cdri_index(
         raise RuntimeError(f"API error: code={payload['code']}, msg={payload.get('msg')}")
 
     df = pd.DataFrame(payload["data"])
-
+    df = df.drop(columns=["price"], errors="ignore")
+    df["timestamp"] = df["time"]
+    df.drop(columns=["time"], inplace=True, errors="ignore")
     os.makedirs("data/cglass/futures", exist_ok=True)
-    df.to_csv("data/cglass/futures/futures-cdri.csv", index=False)
+    df.to_csv(f"data/cglass/futures/futures-cdri-{exchange}-{symbol}-{interval}.csv", index=False)
     return df
 # a = fetch_cdri_index()
 # print(a.head())
@@ -1333,7 +1349,7 @@ def fetch_etf_btc()->pd.DataFrame:
         raise RuntimeError(f"API error: code={payload['code']}, msg={payload.get('msg')}")
 
     df = pd.DataFrame(payload["data"])
-
+    df = df.drop(columns=["price"], errors="ignore")
     os.makedirs("data/cglass/futures", exist_ok=True)
     df.to_csv("data/cglass/futures/futures-etf-btc.csv", index=False)
     return df
@@ -1350,7 +1366,7 @@ def fetch_etf_eth()->pd.DataFrame:
         raise RuntimeError(f"API error: code={payload['code']}, msg={payload.get('msg')}")
 
     df = pd.DataFrame(payload["data"])
-
+    df = df.drop(columns=["price"], errors="ignore")
     os.makedirs("data/cglass/futures", exist_ok=True)
     df.to_csv("data/cglass/futures/futures-etf-eth.csv", index=False)
     return df
