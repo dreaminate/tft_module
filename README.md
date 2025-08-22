@@ -4,7 +4,7 @@
 多目标 **Temporal Fusion Transformer (TFT)** 项目，用于加密/股票等金融时间序列的多周期、多任务预测。
 内置**特征与目标构建流水线**、**自动实验目录**、**复合指标加权保存**、**阶段性损失权重调度**、**Warm-Start 微调**、以及\*\*(symbol, period) 粒度的回归目标标准化\*\*等功能。
 
-> 适配 1h / 4h / 1d 等多周期数据，支持同时预测分类与回归目标（如涨跌、对数收益、回撤概率等），并通过自定义 **Composite Score** 选取最优 checkpoint。
+> 适配 1h / 4h / 1d 等多周期数据，支持同时预测分类与回归目标（如涨跌、对数收益、回撤概率等）
 
 ---
 
@@ -442,8 +442,6 @@ rm -r runs/train_multi_tft-202507*    # 删除特定时间前的 runs
 
 根据你的项目需要添加许可证（如 MIT/Apache-2.0 等）。若暂不指定，可先以 “All rights reserved.” 作为占位。
 
----
 
-### 最后说明
 
-* 如果你需要，我可以把 README 中的配置示例拆成三个可直接落地的模板：`configs/model_config.yaml`、`configs/weights_config.yaml`、`configs/composite_score.yaml`，并按你的**实际目标与周期**自动展开**完整指标清单**（每个 period × 每个 metric 全显式列出，便于直接改权重运行）。
+
