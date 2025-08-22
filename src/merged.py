@@ -50,7 +50,7 @@ def main(base_dir: str, output_path: str, symbols: list[str], periods: list[str]
     for period in periods:
         period_dir = os.path.join(base_dir, period)
         for symbol in symbols:
-            file_name = f"{symbol}_{period}.csv"
+            file_name = f"{symbol}_{period}_all.csv"
             file_path = os.path.join(period_dir, file_name)
             if not os.path.exists(file_path):
                 print(f"[❌] 文件不存在: {file_path}")
@@ -148,7 +148,7 @@ def main(base_dir: str, output_path: str, symbols: list[str], periods: list[str]
 # ============================================
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Merge crypto CSVs across symbols & periods")
-    parser.add_argument("--base_dir", default="data/crypto_targeted_and_indicated_merged", help="根目录，里面按 period/SYMBOL.csv 存放")
+    parser.add_argument("--base_dir", default="data/crypto_targeted_and_indicated", help="根目录，里面按 period/SYMBOL.csv 存放")
     parser.add_argument("--output", default="data/merged/full_merged.csv", help="输出 merged csv 路径")
     parser.add_argument("--symbols", nargs="*", default=["BTC_USDT", "ETH_USDT", "BNB_USDT","ADA_USDT","SOL_USDT"], help="币种列表")
     parser.add_argument("--periods", nargs="*", default=["1h", "4h", "1d"], help="周期列表")
@@ -156,4 +156,4 @@ if __name__ == "__main__":
 
     os.makedirs(os.path.dirname(args.output), exist_ok=True)
     main(args.base_dir, args.output, args.symbols, args.periods)
-# python src/merged.py --base_dir data/crypto_targeted_and_indicated_merged --output data/merged/full_merged.csv --symbols BTC_USDT ETH_USDT BNB_USDT ADA_USDT SOL_USDT --periods 1h 4h 1d
+# python src/merged.py --base_dir data/crypto_targeted_and_indicated--output data/merged/full_merged.csv --symbols BTC_USDT ETH_USDT BNB_USDT ADA_USDT SOL_USDT --periods 1h 4h 1d

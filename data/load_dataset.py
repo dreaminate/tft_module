@@ -1,4 +1,21 @@
 import pandas as pd
+import pickle
+
+class _NumpyCoreAliasUnpickler(pickle.Unpickler):
+    def find_class(self, module, name):
+        if module.startswith("numpy._core"):
+            module = module.replace("numpy._core", "numpy.core")
+        return super().find_class(module, name)
+
+def read_pickle_compat(path):
+    import pandas as pd
+    try:
+        return pd.read_pickle(path)
+    except ModuleNotFoundError as e:
+        if "numpy._core" not in str(e):
+            raise
+        with open(path, "rb") as fh:
+            return _NumpyCoreAliasUnpickler(fh).load()
 import numpy as np
 from typing import List, Tuple
 from pytorch_forecasting import TimeSeriesDataSet
@@ -23,7 +40,7 @@ def get_dataloaders(
     data_path = "data/pkl_merged/full_merged.pkl"
 
     # === 加载 pkl 数据 ===
-    df = pd.read_pickle(data_path)
+    df = read_pickle_compat(data_path)
 
     # === 类型转换（可选）===
     df = df.astype({

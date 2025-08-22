@@ -1,4 +1,4 @@
-data_path: data/pkl_merged/full_merged.pkl
+data_path: data/merged/full_merged.csv
 resume_ckpt: checkpoints/last.ckpt
 warm_start_ckpt: checkpoints/best.ckpt
 
@@ -7,13 +7,13 @@ warm_start_ckpt: checkpoints/best.ckpt
 val_mode: ratio
 val_days: 14     # 若 val_mode = "days"
 val_ratio: 0.2   # 若 val_mode = "ratio"
-batch_size: 768
-num_workers: 15
-hidden_size: 192
-lstm_layers: 2
-attention_head_size: 8
+batch_size: 64
+num_workers: 1
+hidden_size: 128
+lstm_layers: 1
+attention_head_size: 4
 dropout: 0.2
-learning_rate: 7.59e-02
+learning_rate: 7.59e-03
 max_epochs: 10
 precision: "16-mixed"
 grad_clip: 0.2

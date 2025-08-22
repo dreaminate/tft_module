@@ -4,7 +4,6 @@ import torch
 from lightning.pytorch import Trainer
 from lightning.pytorch.callbacks import EarlyStopping
 from lightning.pytorch.loggers import TensorBoardLogger
-from lightning.pytorch.tuner import Tuner
 from model.tft_module import MyTFTModule
 from data.load_dataset import get_dataloaders
 from utils.loss_factory import get_losses_by_targets
@@ -113,3 +112,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+#    python train_multi_tft.py
