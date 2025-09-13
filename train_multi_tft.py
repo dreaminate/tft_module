@@ -4,10 +4,9 @@ import torch
 from lightning.pytorch import Trainer
 from lightning.pytorch.callbacks import EarlyStopping
 from lightning.pytorch.loggers import TensorBoardLogger
-from model.tft_module import MyTFTModule
-from data.load_dataset import get_dataloaders
-from utils.loss_factory import get_losses_by_targets
-from utils.metric_factory import get_metrics_by_targets
+from tft.models import MyTFTModule
+from tft.data import get_dataloaders
+from tft.utils import get_losses_by_targets, get_metrics_by_targets
 from lightning.pytorch.callbacks import ModelCheckpoint, LearningRateMonitor
 import warnings
 warnings.filterwarnings(

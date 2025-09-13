@@ -5,17 +5,16 @@ if __name__ == "__main__":
     import yaml
     import torch
     from lightning.pytorch import Trainer
-    from model.tft_module import MyTFTModule
-    from data.load_dataset import get_dataloaders
-    from utils.loss_factory import get_losses_by_targets
-    from utils.metric_factory import get_metrics_by_targets
-    from utils.checkpoint_utils import load_partial_weights
+    from tft.models import MyTFTModule
+    from tft.data import get_dataloaders
+    from tft.utils import get_losses_by_targets, get_metrics_by_targets
+    from tft.utils.checkpoint_utils import load_partial_weights
     from lightning.pytorch.callbacks import EarlyStopping
     from lightning.pytorch.loggers import TensorBoardLogger
-    from callbacks.custom_checkpoint import CustomCheckpoint
-    from utils.stage_summary import save_stage_summary
-    from utils.composite import filter_weights_by_period
-    from utils.run_helper import prepare_run_dirs
+    from tft.callbacks import CustomCheckpoint
+    from tft.utils.stage_summary import save_stage_summary
+    from tft.utils.composite import filter_weights_by_period
+    from tft.utils.run_helper import prepare_run_dirs
     torch.set_float32_matmul_precision('medium')
     torch.backends.cudnn.benchmark = True
     # === 读取配置 ===
@@ -29,7 +28,7 @@ if __name__ == "__main__":
         composite_weights = yaml.safe_load(f)
 
     # === 加载数据 ===
-    train_loader, val_loader, target_names, train_ds, periods = get_dataloaders(
+    train_loader, val_loader, target_names, train_ds, periods, norm_pack = get_dataloaders(
         data_path=model_cfg["data_path"],
         sampler_mode=model_cfg.get("sampler_mode", "balanced"),
         focus_period=model_cfg.get("focus_period"),
