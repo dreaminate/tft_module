@@ -5,13 +5,14 @@ if __name__ == "__main__":
     import yaml
     import torch
     from lightning.pytorch import Trainer
-    from tft.models import MyTFTModule
-    from tft.data import get_dataloaders
-    from tft.utils import get_losses_by_targets, get_metrics_by_targets
-    from tft.utils.checkpoint_utils import load_partial_weights
+    from models.tft_module import MyTFTModule
+    from data.load_dataset import get_dataloaders
+    from utils.loss_factory import get_losses_by_targets
+    from utils.metric_factory import get_metrics_by_targets
+    from utils.checkpoint_utils import load_partial_weights
     from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint, LearningRateMonitor
     from lightning.pytorch.loggers import TensorBoardLogger
-    from tft.utils.stage_summary import save_stage_summary
+    from utils.stage_summary import save_stage_summary
     from tft.utils.run_helper import prepare_run_dirs
     torch.set_float32_matmul_precision('medium')
     torch.backends.cudnn.benchmark = True
