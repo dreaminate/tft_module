@@ -23,6 +23,36 @@ if __name__ == "__main__":
     with open("configs/weights_config.yaml", "r") as f:
         weight_cfg = yaml.safe_load(f)
 
+    # === 读取 targets.yaml（按专家） ===
+    def _load_targets(expert: str | None = None):
+        tgt_path = os.path.join("configs", "targets.yaml")
+        if not os.path.exists(tgt_path):
+            return None
+        with open(tgt_path, "r", encoding="utf-8") as f:
+            all_cfg = yaml.safe_load(f) or {}
+        experts = (all_cfg or {}).get("experts", {})
+        default_expert = (all_cfg or {}).get("default_expert", None)
+        exp = expert or os.environ.get("EXPERT") or default_expert
+        if not exp:
+            return None
+        entry = experts.get(exp, None)
+        if not entry:
+            raise ValueError(f"Expert '{exp}' not found in configs/targets.yaml")
+        model_type = entry.get("model_type", "tft")
+        targets = entry.get("targets", [])
+        return {"expert": exp, "model_type": model_type, "targets": targets}
+
+    expert_cfg = _load_targets(model_cfg.get("expert"))
+    exp_name = None
+    model_type = "tft"
+    targets_override = None
+    if expert_cfg:
+        exp_name = expert_cfg["expert"]
+        model_type = expert_cfg.get("model_type", "tft")
+        targets_override = expert_cfg.get("targets", None)
+        if model_type != "tft":
+            raise NotImplementedError(f"model_type '{model_type}' not supported yet")
+
     # === 加载数据 ===
     train_loader, val_loader, target_names, train_ds, periods, norm_pack = get_dataloaders(
         data_path=model_cfg["data_path"],
@@ -31,6 +61,7 @@ if __name__ == "__main__":
         val_mode=model_cfg.get("val_mode", "days"),
         val_days=model_cfg.get("val_days", 252),
         val_ratio=model_cfg.get("val_ratio", 0.2),
+        targets_override=targets_override,
     )
     period_map = {i: p for i, p in enumerate(periods)}
     # === 获取 Loss 与 Metric ===
@@ -71,13 +102,15 @@ if __name__ == "__main__":
 
     # === 设置日志与 Callback ===
     run_dirs = prepare_run_dirs()
-    logger = TensorBoardLogger("lightning_logs", name=model_cfg.get("log_name", "tft_multi"))
+    logs_root = os.path.join("lightning_logs", "experts", exp_name or "default", model_type)
+    os.makedirs(logs_root, exist_ok=True)
+    logger = TensorBoardLogger(logs_root, name=model_cfg.get("log_name", "tft_multi"))
     ckpt_cb = ModelCheckpoint(
         monitor="val_loss_epoch",
         filename="epoch{epoch:02d}-loss{val_loss_epoch:.4f}",
         save_top_k=3,
         mode="min",
-        dirpath=run_dirs["ckpt"],
+        dirpath=os.path.join("checkpoints", "experts", exp_name or "default", model_type),
     )
     with open(f"{run_dirs['cfg']}/model_config.yaml", "w") as f:
         yaml.safe_dump(model_cfg, f)

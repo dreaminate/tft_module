@@ -1,6 +1,0 @@
-# 在此按行列出你希望强制保留的特征名（可选）。
-# 该文件不会自动生效，仅在你在下游聚合/优化环节将其与结果并集时使用。
-# 示例：
-# taker_buy_volume_usd_z
-# long_short_ratio_ls_acc_global
-

@@ -7,19 +7,19 @@ warm_start_ckpt: checkpoints/best.ckpt
 val_mode: ratio
 val_days: 14     # 若 val_mode = "days"
 val_ratio: 0.2   # 若 val_mode = "ratio"
-batch_size: 64
+batch_size: 128
 num_workers: 1
-hidden_size: 128
+hidden_size: 64
 lstm_layers: 1
-attention_head_size: 4
-dropout: 0.2
-learning_rate: 7.59e-03
-max_epochs: 10
+attention_head_size: 2
+dropout: 0.1
+learning_rate: 3.0e-3
+max_epochs: 2
 precision: "16-mixed"
 grad_clip: 0.2
-accumulate: 2
-early_stop_patience: 5
-log_name: tft_multi
+accumulate: 1
+early_stop_patience: 3
+log_name: gating_quick
 
 loss_schedule:
   0: [6.0, 3.0, 4.0, 1.5, 3.5, 2.5, 1.5, 1.2, 1.2, 1.8, 1.3]

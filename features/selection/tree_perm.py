@@ -45,8 +45,8 @@ def fit_tree_and_permutation(X_tr: pd.DataFrame, y_tr: pd.Series, X_va: pd.DataF
         return reg.feature_importances_, perm.importances_mean, perm.importances_std, float(base_score)
 
 
-def run(periods: List[str], val_mode: str, val_days: int, val_ratio: float, topn_preview: int, out_dir: str) -> None:
-    ds = load_split(val_mode=val_mode, val_days=val_days, val_ratio=val_ratio)
+def run(periods: List[str], val_mode: str, val_days: int, val_ratio: float, topn_preview: int, out_dir: str, allowlist_path: str | None = None) -> None:
+    ds = load_split(val_mode=val_mode, val_days=val_days, val_ratio=val_ratio, allowlist_path=allowlist_path)
     os.makedirs(out_dir, exist_ok=True)
     for per in periods:
         per_tr = ds.train[ds.train["period"].astype(str) == str(per)]
@@ -78,12 +78,12 @@ def main():
     ap.add_argument("--val-ratio", type=float, default=0.2)
     ap.add_argument("--preview", type=int, default=10)
     ap.add_argument("--out", type=str, default="reports/feature_evidence/tree_perm")
+    ap.add_argument("--allowlist", type=str, default=None, help="Optional feature allowlist (one name per line)")
     args = ap.parse_args()
-    ds = load_split(val_mode=args.val_mode, val_days=args.val_days, val_ratio=args.val_ratio)
+    ds = load_split(val_mode=args.val_mode, val_days=args.val_days, val_ratio=args.val_ratio, allowlist_path=args.allowlist)
     periods = args.periods.split(",") if args.periods else ds.periods
-    run(periods, args.val_mode, args.val_days, args.val_ratio, args.preview, args.out)
+    run(periods, args.val_mode, args.val_days, args.val_ratio, args.preview, args.out, allowlist_path=args.allowlist)
 
 
 if __name__ == "__main__":
     main()
-

@@ -18,7 +18,7 @@ def read_pickle_compat(path):
         with open(path, "rb") as fh:
             return _NumpyCoreAliasUnpickler(fh).load()
 import numpy as np
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 from pytorch_forecasting import TimeSeriesDataSet
 from pytorch_forecasting.data import NaNLabelEncoder, MultiNormalizer, TorchNormalizer
 from torch.utils.data import DataLoader
@@ -31,6 +31,7 @@ def get_dataloaders(
     val_mode: str = "days",
     val_days: int = 30,
     val_ratio: float = 0.2,
+    targets_override: Optional[List[str]] = None,
     **kwargs,
 ) -> Tuple[DataLoader, DataLoader, List[str], TimeSeriesDataSet, List[str], dict]:
     # 按照既有约定，优先读取 pkl 合并结果
@@ -59,6 +60,9 @@ def get_dataloaders(
         "target_sideway_detect",
         "target_trend_persistence",
     ]
+    if targets_override:
+        # 只保留数据中存在的列
+        targets = [t for t in targets_override if t in df.columns]
     regression_targets = [
         "target_logreturn",
         "target_logsharpe_ratio",
@@ -175,4 +179,3 @@ def get_dataloaders(
         drop_last=True,
     )
     return train_loader, val_loader, targets, train_ds, period_classes, norm_pack
-

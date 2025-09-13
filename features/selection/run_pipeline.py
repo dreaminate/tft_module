@@ -20,12 +20,13 @@ def main():
     ap.add_argument("--topk", type=int, default=128)
     ap.add_argument("--out-summary", type=str, default="reports/feature_evidence/aggregated_core.csv")
     ap.add_argument("--out-allowlist", type=str, default="configs/selected_features.txt")
+    ap.add_argument("--allowlist", type=str, default=None, help="Optional feature allowlist (one name per line)")
     args = ap.parse_args()
     periods = args.periods.split(",") if args.periods else None
     if periods is None:
-        ds = load_split(val_mode=args.val_mode, val_days=args.val_days, val_ratio=args.val_ratio)
+        ds = load_split(val_mode=args.val_mode, val_days=args.val_days, val_ratio=args.val_ratio, allowlist_path=args.allowlist)
         periods = ds.periods
-    run_tree_perm(periods, args.val_mode, args.val_days, args.val_ratio, args.preview, args.tree_out)
+    run_tree_perm(periods, args.val_mode, args.val_days, args.val_ratio, args.preview, args.tree_out, allowlist_path=args.allowlist)
     agg = aggregate_tree_perm(args.tree_out)
     core = build_unified_core(agg, args.weights, topk=args.topk, tft_file=args.tft_gating, tft_bonus=args.tft_bonus)
     os.makedirs(os.path.dirname(args.out_summary), exist_ok=True)
@@ -36,4 +37,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

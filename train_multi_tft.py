@@ -25,19 +25,60 @@ def load_yaml(path: str):
         return yaml.safe_load(f)
 
 
+def _load_targets(expert: str | None = None):
+    tgt_path = os.path.join("configs", "targets.yaml")
+    if not os.path.exists(tgt_path):
+        return None
+    with open(tgt_path, "r", encoding="utf-8") as f:
+        all_cfg = yaml.safe_load(f) or {}
+    experts = (all_cfg or {}).get("experts", {})
+    default_expert = (all_cfg or {}).get("default_expert", None)
+    exp = expert or os.environ.get("EXPERT") or default_expert
+    if not exp:
+        return None
+    entry = experts.get(exp, None)
+    if not entry:
+        raise ValueError(f"Expert '{exp}' not found in configs/targets.yaml")
+    model_type = entry.get("model_type", "tft")
+    targets = entry.get("targets", [])
+    return {"expert": exp, "model_type": model_type, "targets": targets}
+
+
+def _resolve_weights(weight_cfg: dict, target_names: list[str]) -> list[float]:
+    by_name = weight_cfg.get("custom_weights_by_target")
+    if isinstance(by_name, dict):
+        return [float(by_name.get(t, 1.0)) for t in target_names]
+    lst = weight_cfg.get("custom_weights")
+    if isinstance(lst, (list, tuple)) and len(lst) == len(target_names):
+        return [float(x) for x in lst]
+    # 兜底：全 1
+    return [1.0] * len(target_names)
+
+
 def main():
     # ===== 读取配置 =====
     model_cfg = load_yaml("configs/model_config.yaml")
     weight_cfg = load_yaml("configs/weights_config.yaml")
+    expert_cfg = _load_targets(model_cfg.get("expert"))
+    exp_name = None
+    model_type = "tft"
+    targets_override = None
+    if expert_cfg:
+        exp_name = expert_cfg["expert"]
+        model_type = expert_cfg.get("model_type", "tft")
+        targets_override = expert_cfg.get("targets", None)
+        if model_type != "tft":
+            raise NotImplementedError(f"model_type '{model_type}' not supported yet")
 
     # ===== 数据加载 =====
-    train_loader, val_loader, target_names, train_ds, periods,norm_pack = get_dataloaders(
+    train_loader, val_loader, target_names, train_ds, periods, norm_pack = get_dataloaders(
         data_path=model_cfg["data_path"],
         batch_size=model_cfg.get("batch_size", 64),
         num_workers=model_cfg.get("num_workers", 4),
         val_mode=model_cfg.get("val_mode", "days"),
         val_days=model_cfg.get("val_days", 252),
         val_ratio=model_cfg.get("val_ratio", 0.2),
+        targets_override=targets_override,
     )
     enc = train_ds.categorical_encoders.get("period", None)
     classes_ = getattr(enc, "classes_", None)
@@ -56,7 +97,7 @@ def main():
         steps_per_epoch=steps_per_epoch_eff,
         norm_pack=norm_pack,  
         loss_list=get_losses_by_targets(target_names),
-        weights=weight_cfg["custom_weights"],
+        weights=_resolve_weights(weight_cfg, target_names),
         output_size=[1] * len(target_names),
         metrics_list=get_metrics_by_targets(target_names),
         target_names=target_names,
@@ -73,13 +114,15 @@ def main():
     )
 
     # ===== 日志 & 回调 =====
-    
-    logger = TensorBoardLogger("lightning_logs", name=model_cfg.get("log_name", "tft_multi"))
+    log_root = os.path.join("lightning_logs", "experts", exp_name or "default", model_type)
+    os.makedirs(log_root, exist_ok=True)
+    logger = TensorBoardLogger(log_root, name=model_cfg.get("log_name", "tft_multi"))
     ckpt_cb = ModelCheckpoint(
         monitor="val_loss_epoch",
         filename="epoch{epoch:02d}-loss{val_loss_epoch:.4f}",
         save_top_k=3,
         mode="min",
+        dirpath=os.path.join("checkpoints", "experts", exp_name or "default", model_type),
     )
     early_stop = EarlyStopping(
         monitor="val_loss_epoch",
@@ -87,8 +130,13 @@ def main():
         mode="min",
     )
 
-    # 保存配置文件
-    yaml.safe_dump(model_cfg, open("logs/configs/model_config.yaml", "w"))
+    # 保存配置文件快照
+    os.makedirs(os.path.join(log_root, "configs"), exist_ok=True)
+    with open(os.path.join(log_root, "configs", "model_config.yaml"), "w", encoding="utf-8") as f:
+        yaml.safe_dump(model_cfg, f)
+    if expert_cfg:
+        with open(os.path.join(log_root, "configs", "targets_used.yaml"), "w", encoding="utf-8") as f:
+            yaml.safe_dump(expert_cfg, f)
     
     # ===== 训练 =====
     trainer = Trainer(

@@ -1,0 +1,20 @@
+default_expert: tech_clf
+
+experts:
+  tech_clf:
+    model_type: tft
+    targets:
+      - target_binarytrend
+      - target_pullback_prob
+      - target_sideway_detect
+      - target_drawdown_prob
+
+  tech_reg:
+    model_type: tft
+    targets:
+      - target_logreturn
+      - target_logsharpe_ratio
+      - target_breakout_count
+      - target_max_drawdown
+      - target_trend_persistence
+
