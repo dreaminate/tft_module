@@ -117,7 +117,7 @@ def flush_append_csv(rows, dst_csv, symbol, timeframe):
     df.to_csv(dst_csv, mode='a', header=write_header, index=False)
 
 # ====================== 交错抓取主循环 ======================
-def main():
+def catch_main():
     base_since = iso8601_to_ms(SINCE_STR)
 
     tasks = []
@@ -196,4 +196,4 @@ def main():
                 print(f"💾 保存完成：{t['path']}")
 
 if __name__ == "__main__":
-    main()
+    catch_main()

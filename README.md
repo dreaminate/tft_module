@@ -67,14 +67,37 @@ tft_module/
 │  ├─ composite.py
 │  ├─ weighted_bce.py
 │  └─ stage_summary.py
-└─ src/                      # 特征与目标生成脚本
-   ├─ indicating.py
-   ├─ indicators.py
-   ├─ target_config.py
-   ├─ groupwise_rolling_norm.py
-   ├─ data_fusion.py
-   ├─ csv2Parquet.py
-   └─ csv2Pkl.py
+├─ tft/                      # 新的包结构（核心代码归档于此）
+│  ├─ models/                # 模型定义
+│  │  └─ tft_module.py
+│  ├─ data/                  # 数据加载与拆分
+│  │  └─ loaders.py
+│  ├─ utils/                 # 工具库（loss/metric 等）
+│  │  ├─ loss_factory.py
+│  │  ├─ metric_factory.py
+│  │  ├─ weighted_bce.py
+│  │  ├─ loss_scheduler.py
+│  │  ├─ composite.py
+│  │  ├─ run_helper.py
+│  │  ├─ stage_summary.py
+│  │  ├─ checkpoint_utils.py
+│  │  ├─ compare_logs.py
+│  │  └─ plot_loss_weights.py
+│  ├─ callbacks/
+│  │  └─ custom_checkpoint.py
+│  ├─ features/
+│  │  └─ selection/          # 特征筛选流水线（树/置换/TFT gating/聚合/优化/滚验）
+│  │     ├─ common.py
+│  │     ├─ tree_perm.py
+│  │     ├─ aggregate_core.py
+│  │     ├─ tft_gating.py
+│  │     ├─ optimize_subset.py
+│  │     └─ rolling_validate.py
+│  └─ pipelines/
+│     └─ prune_and_time_audit.py
+└─ src/                      # 旧数据管线与脚本（保留兼容转发/逐步迁移）
+   ├─ indicating.py / indicators.py / ...
+   └─ feature_selection/ (已转发至 tft.features.selection.*)
 ```
 
 ---
@@ -415,6 +438,42 @@ val_loss_for_ckpt: -0.30
 
   * 自动选择 top-k checkpoint（或 `last.ckpt`）进行验证集推理；
   * 导出预测 vs 真实的 CSV，便于离线分析。
+
+### 特征筛选（分周期&分目标 → 核心集）
+
+已内置基础特征筛选流水线：
+
+1) 树模型重要度 + 置换重要度（按周期、按目标）
+
+```bash
+python -m tft.features.selection.tree_perm --val-mode ratio --val-ratio 0.2 --preview 10 \
+  --out reports/feature_evidence/tree_perm
+```
+
+2) 跨周期聚合 & 统一核心集（可选择融合 TFT gating 打分作为加分项）
+
+```bash
+python -m tft.features.selection.aggregate_core --in reports/feature_evidence/tree_perm \
+  --weights configs/weights_config.yaml --topk 128 \
+  --tft-file reports/feature_evidence/tft_gating.csv --tft-bonus 0.15 \
+  --out-summary reports/feature_evidence/aggregated_core.csv \
+  --out-allowlist configs/selected_features.txt
+```
+
+3) 一键串联（可选）：
+
+```bash
+python -m tft.features.selection.run_pipeline --val-mode ratio --val-ratio 0.2 --topk 128
+```
+
+4) TFT gating（可选，如有已训练 checkpoint）：
+
+```bash
+python -m tft.features.selection.tft_gating --ckpt lightning_logs/<run>/checkpoints/epoch=..-loss=..ckpt \
+  --out reports/feature_evidence/tft_gating.csv
+```
+
+流水线会导出 `configs/selected_features.txt`，训练数据加载器会自动读取该白名单，仅保留入选特征参与训练。
 
 ---
 

@@ -4,7 +4,7 @@ from torchmetrics.classification import (
 from torchmetrics import Accuracy, Precision, Recall
 from torchmetrics.regression import MeanSquaredError, MeanAbsoluteError
 from torch.nn import MSELoss, SmoothL1Loss, CrossEntropyLoss
-from utils.weighted_bce import WeightedBinaryCrossEntropy
+from tft.utils.weighted_bce import WeightedBinaryCrossEntropy
 from typing import List
 
 
