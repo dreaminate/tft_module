@@ -24,6 +24,41 @@ from pytorch_forecasting.data import NaNLabelEncoder, MultiNormalizer, TorchNorm
 from torch.utils.data import DataLoader
 
 
+def _robust_parse_datetime(df: pd.DataFrame) -> pd.DataFrame:
+    """Ensure a valid 'datetime' column by robust parsing.
+
+    - Tries pandas>=2.0 format='mixed' with errors='coerce'
+    - Falls back to generic to_datetime coercion
+    - If still poor, tries using a numeric 'timestamp' (auto-detect ms vs s)
+    """
+    if 'datetime' in df.columns:
+        s = df['datetime']
+        parsed = None
+        try:
+            parsed = pd.to_datetime(s, format='mixed', errors='coerce')
+        except TypeError:
+            parsed = pd.to_datetime(s, errors='coerce', infer_datetime_format=False)
+        if parsed.notna().any():
+            df['datetime'] = parsed
+            return df
+
+    if 'timestamp' in df.columns:
+        ts = pd.to_numeric(df['timestamp'], errors='coerce')
+        if ts.notna().any():
+            med = float(ts.dropna().median()) if ts.dropna().size else 0.0
+            unit = 'ms' if med >= 1e11 else 's'
+            parsed = pd.to_datetime(ts, unit=unit, errors='coerce')
+            if parsed.notna().any():
+                df['datetime'] = parsed
+                return df
+
+    # Last resort: coerce whatever is in 'datetime'
+    if 'datetime' in df.columns:
+        df['datetime'] = pd.to_datetime(df['datetime'], errors='coerce')
+        return df
+    raise ValueError("Cannot construct a valid 'datetime' column from either 'datetime' or 'timestamp'.")
+
+
 def get_dataloaders(
     data_path: str,
     batch_size: int = 64,
@@ -32,17 +67,31 @@ def get_dataloaders(
     val_days: int = 30,
     val_ratio: float = 0.2,
     targets_override: Optional[List[str]] = None,
+    periods: Optional[List[str]] = None,
+    symbols: Optional[List[str]] = None,
+    selected_features_path: Optional[str] = None,
     **kwargs,
 ) -> Tuple[DataLoader, DataLoader, List[str], TimeSeriesDataSet, List[str], dict]:
-    # 按照既有约定，优先读取 pkl 合并结果
-    data_path = "data/pkl_merged/full_merged.pkl"
-    df = read_pickle_compat(data_path)
+    # 优先使用传入的 data_path；若不可用则回退到默认 pkl 路径
+    default_pkl = "data/pkl_merged/full_merged.pkl"
+    use_path = data_path or default_pkl
+    if not os.path.exists(use_path):
+        use_path = default_pkl
+    df = read_pickle_compat(use_path)
 
     df = df.astype({
         **{col: "float32" for col in df.select_dtypes(include="float64").columns},
         **{col: "int32" for col in df.select_dtypes(include="int64").columns},
     })
-    df["datetime"] = pd.to_datetime(df["datetime"])
+    df = _robust_parse_datetime(df)
+    # 可选：按专家配置过滤周期与符号
+    if periods:
+        pset = set(str(p) for p in periods)
+        df = df[df["period"].astype(str).isin(pset)]
+    if symbols:
+        sset = set(str(s) for s in symbols)
+        df = df[df["symbol"].astype(str).isin(sset)]
+
     df = df.sort_values(["symbol", "period", "datetime"]).copy()
     df["time_idx"] = df.groupby(["symbol", "period"]).cumcount()
     df["symbol"], df["period"] = df["symbol"].astype(str), df["period"].astype(str)
@@ -97,8 +146,8 @@ def get_dataloaders(
         and c not in targets
         and not df_train[c].isna().all()
     ]
-    sel_path = os.path.join("configs", "selected_features.txt")
-    if os.path.exists(sel_path):
+    sel_path = selected_features_path or os.path.join("configs", "selected_features.txt")
+    if sel_path and os.path.exists(sel_path):
         with open(sel_path, "r", encoding="utf-8") as fh:
             allow = [ln.strip() for ln in fh if ln.strip() and not ln.strip().startswith("#")]
         unknown_reals = [c for c in unknown_reals if c in allow]
@@ -135,10 +184,17 @@ def get_dataloaders(
     period_encoder = NaNLabelEncoder(add_nan=True)
     period_encoder.fit(pd.Series(period_classes))
 
-    target_normalizer = MultiNormalizer([TorchNormalizer(method="identity", center=False)] * len(targets))
+    # 目标归一化器：单目标用单个 Normalizer，多目标用 MultiNormalizer
+    if len(targets) == 1:
+        target_normalizer = TorchNormalizer(method="identity", center=False)
+        ts_target = targets[0]
+    else:
+        target_normalizer = MultiNormalizer([TorchNormalizer(method="identity", center=False)] * len(targets))
+        # 单目标时使用字符串目标，多目标时使用列表
+        ts_target = targets
     ts_cfg = dict(
         time_idx="time_idx",
-        target=targets,
+        target=ts_target,
         group_ids=["symbol", "period"],
         max_encoder_length=36,
         max_prediction_length=1,

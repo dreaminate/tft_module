@@ -77,10 +77,11 @@ def main():
     ap.add_argument("--splits", type=int, default=5)
     ap.add_argument("--weights", type=str, default="configs/weights_config.yaml")
     ap.add_argument("--periods", type=str, default=None)
+    ap.add_argument("--pkl", type=str, default=None, help="Override merged dataset PKL path")
     args = ap.parse_args()
     with open(args.features, "r", encoding="utf-8") as f:
         feats = [ln.strip() for ln in f if ln.strip() and not ln.startswith("#")]
-    ds = load_split(val_mode=args.val_mode, val_days=args.val_days, val_ratio=args.val_ratio)
+    ds = load_split(pkl_path=args.pkl or "data/pkl_merged/full_merged.pkl", val_mode=args.val_mode, val_days=args.val_days, val_ratio=args.val_ratio)
     periods = args.periods.split(",") if args.periods else ds.periods
     results: List[Dict[str, float]] = []
     for per in periods:
@@ -111,4 +112,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

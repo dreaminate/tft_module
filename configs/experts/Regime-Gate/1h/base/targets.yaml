@@ -1,0 +1,7 @@
+model_type: tft
+targets:
+  - target_sideway_detect
+weights:
+  by_target:
+    target_sideway_detect: 1.0
+

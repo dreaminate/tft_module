@@ -1,0 +1,56 @@
+# Quick pass for two experts (1h only, no time-permutation) to produce initial core/allowlists fast
+
+experts:
+  alpha_dir_tft:
+    name: Alpha-Dir-TFT
+    pkl_path: data/merged/expert_minimal/full_merged_with_fundamentals.pkl
+    periods: ["1h"]
+    targets: ["target_binarytrend"]
+
+  derivatives_micro:
+    name: Derivatives-Microstructure
+    pkl_path: data/merged/expert_group/tech_fund_only/full_merged_with_fundamentals.pkl
+    periods: ["1h"]
+    targets: ["target_binarytrend", "target_logreturn"]
+
+splits:
+  outer_val:
+    mode: days
+    days: 60
+    ratio: 0.2
+  inner:
+    n_splits: 3
+    val_ratio: 0.2
+
+permutation:
+  enabled: false
+  method: cyclic_shift
+  block_len_by_period:
+    "1h": 36
+  group_cols: ["symbol"]
+  repeats: 3
+
+aggregation:
+  weights_yaml: configs/weights_config.yaml
+  topk_core: 96
+  topk_per_pair: 48
+  min_appear_rate: 0.5
+
+wrapper:
+  method: rfe
+  rfe:
+    patience: 5
+    sample_cap: 30000
+  ga:
+    pop: 20
+    gen: 8
+    cx: 0.7
+    mut: 0.1
+    sample_cap: 30000
+
+finalize:
+  expert_only_max: 32
+  outputs:
+    core_summary_csv: reports/feature_evidence/aggregated_core.csv
+    core_allowlist_txt: configs/selected_features.txt
+    optimized_allowlist_txt: reports/feature_evidence/optimized_features.txt

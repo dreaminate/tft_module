@@ -1,0 +1,7 @@
+model_type: tft
+targets:
+  - target_binarytrend
+weights:
+  by_target:
+    target_binarytrend: 1.2
+

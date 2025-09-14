@@ -1,6 +1,8 @@
 import os
 import yaml
 import torch
+import argparse
+from typing import Optional
 from lightning.pytorch import Trainer
 from lightning.pytorch.callbacks import EarlyStopping
 from lightning.pytorch.loggers import TensorBoardLogger
@@ -21,7 +23,7 @@ torch.backends.cudnn.benchmark = True
 
 
 def load_yaml(path: str):
-    with open(path, "r") as f:
+    with open(path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
 
 
@@ -55,22 +57,120 @@ def _resolve_weights(weight_cfg: dict, target_names: list[str]) -> list[float]:
     return [1.0] * len(target_names)
 
 
+def _parse_args():
+    parser = argparse.ArgumentParser(description="Train Multi-TFT by expert config")
+    parser.add_argument(
+        "--config",
+        type=str,
+        required=True,
+        help="Path to expert leaf model_config.yaml under configs/experts/...",
+    )
+    parser.add_argument(
+        "--expert",
+        type=str,
+        default=None,
+        help="Override expert name to use from configs/targets.yaml",
+    )
+    return parser.parse_args()
+
+
+def _extract_meta_from_cfg_path(cfg_path: str) -> dict:
+    """Try to infer {expert, period, modality, symbol} from the path under configs/experts.
+
+    E.g., configs/experts/Alpha-Dir-TFT/1h/base/model_config.yaml
+    """
+    parts = os.path.normpath(cfg_path).split(os.sep)
+    meta = {"expert": None, "period": None, "modality": None, "symbol": None}
+    try:
+        if len(parts) >= 5:
+            # [..., configs, experts, <expert>, <period>, <modality>, (<symbol>), model_config.yaml]
+            idx = parts.index("experts")
+            expert = parts[idx + 1]
+            period = parts[idx + 2] if len(parts) > idx + 2 else None
+            modality = parts[idx + 3] if len(parts) > idx + 3 else None
+            # optional symbol layer
+            maybe_symbol = parts[idx + 4] if len(parts) > idx + 4 else None
+            if maybe_symbol and maybe_symbol != "model_config.yaml":
+                meta["symbol"] = maybe_symbol
+            meta["expert"] = expert
+            meta["period"] = period
+            meta["modality"] = modality
+    except ValueError:
+        pass
+    return meta
+
+
+def _find_nearby_config(basename: str, cfg_path: str, expert: Optional[str]) -> Optional[str]:
+    """按优先级查找同名配置文件：
+    1) 叶子目录（cfg 文件所在目录）
+    2) 专家根目录（configs/experts/<Expert>/）
+    3) 全局 configs/
+    """
+    leaf_dir = os.path.dirname(os.path.abspath(cfg_path))
+    cand = [
+        os.path.join(leaf_dir, basename),
+    ]
+    if expert:
+        cand.append(os.path.join("configs", "experts", expert, basename))
+    cand.append(os.path.join("configs", basename))
+    for p in cand:
+        if p and os.path.exists(p):
+            return p
+    return None
+
+
+def _require_leaf_yaml(cfg_path: str, filenames: list[str]) -> dict:
+    leaf_dir = os.path.dirname(os.path.abspath(cfg_path))
+    found = {}
+    missing = []
+    for name in filenames:
+        p = os.path.join(leaf_dir, name)
+        if os.path.exists(p):
+            found[name] = p
+        else:
+            missing.append(name)
+    if missing:
+        raise FileNotFoundError(
+            f"缺少必要的叶子配置文件: {', '.join(missing)}. 请在 {leaf_dir} 下提供这些 YAML 文件。"
+        )
+    return found
+
+
 def main():
+    args = _parse_args()
+    cfg_path = args.config
     # ===== 读取配置 =====
-    model_cfg = load_yaml("configs/model_config.yaml")
-    weight_cfg = load_yaml("configs/weights_config.yaml")
-    expert_cfg = _load_targets(model_cfg.get("expert"))
-    exp_name = None
-    model_type = "tft"
-    targets_override = None
-    if expert_cfg:
-        exp_name = expert_cfg["expert"]
-        model_type = expert_cfg.get("model_type", "tft")
-        targets_override = expert_cfg.get("targets", None)
-        if model_type != "tft":
-            raise NotImplementedError(f"model_type '{model_type}' not supported yet")
+    model_cfg = load_yaml(cfg_path)
+    # 优先使用命令行 --expert，其次 config 中的 expert 字段，其次从路径推断，再次 default_expert
+    inferred = _extract_meta_from_cfg_path(cfg_path)
+    expert_name = args.expert or model_cfg.get("expert") or inferred.get("expert")
+    # 使用叶子 targets.yaml 决定目标与类型
+    exp_name = expert_name or "default"
+    leaf_dir = os.path.dirname(os.path.abspath(cfg_path))
+    # 强制要求 targets.yaml 存在
+    _require_leaf_yaml(cfg_path, ["targets.yaml"])
+    with open(os.path.join(leaf_dir, "targets.yaml"), "r", encoding="utf-8") as f:
+        leaf_targets_obj = yaml.safe_load(f) or {}
+    model_type = leaf_targets_obj.get("model_type", "tft")
+    targets_override = (leaf_targets_obj.get("targets", []) or None)
+    if model_type != "tft":
+        raise NotImplementedError(f"model_type '{model_type}' not supported yet")
 
     # ===== 数据加载 =====
+    # 过滤周期/符号（若配置中给出）
+    cfg_period = model_cfg.get("period") or inferred.get("period")
+    cfg_symbols = model_cfg.get("symbols") or ([] if inferred.get("symbol") is None else [inferred.get("symbol")])
+    # 权重来源：优先 targets.yaml -> weights.by_target/custom；否则回退叶子 weights_config.yaml；都没有则全1
+    weights_section = leaf_targets_obj.get("weights", {}) or {}
+    if isinstance(weights_section, dict) and weights_section.get("by_target"):
+        weight_cfg = {"custom_weights_by_target": weights_section["by_target"]}
+    elif isinstance(weights_section, dict) and isinstance(weights_section.get("custom"), (list, tuple)):
+        weight_cfg = {"custom_weights": weights_section.get("custom")}
+    else:
+        leaf_weights_yaml = os.path.join(leaf_dir, "weights_config.yaml")
+        weight_cfg = load_yaml(leaf_weights_yaml) if os.path.exists(leaf_weights_yaml) else {}
+    sel_feats_path = _find_nearby_config("selected_features.txt", cfg_path, expert_name)
+
     train_loader, val_loader, target_names, train_ds, periods, norm_pack = get_dataloaders(
         data_path=model_cfg["data_path"],
         batch_size=model_cfg.get("batch_size", 64),
@@ -79,6 +179,9 @@ def main():
         val_days=model_cfg.get("val_days", 252),
         val_ratio=model_cfg.get("val_ratio", 0.2),
         targets_override=targets_override,
+        periods=[str(cfg_period)] if cfg_period else None,
+        symbols=[str(s) for s in cfg_symbols] if cfg_symbols else None,
+        selected_features_path=sel_feats_path,
     )
     enc = train_ds.categorical_encoders.get("period", None)
     classes_ = getattr(enc, "classes_", None)
@@ -92,13 +195,15 @@ def main():
     steps_per_epoch_eff = max(1, steps_per_epoch // accum)
 
     # ===== 构建模型 =====
+    out_sizes = [1] * len(target_names)
+    output_size_arg = out_sizes[0] if len(out_sizes) == 1 else out_sizes
     model = MyTFTModule(
         dataset=train_ds,
         steps_per_epoch=steps_per_epoch_eff,
         norm_pack=norm_pack,  
         loss_list=get_losses_by_targets(target_names),
-        weights=_resolve_weights(weight_cfg, target_names),
-        output_size=[1] * len(target_names),
+        weights=_resolve_weights(weight_cfg or {}, target_names),
+        output_size=output_size_arg,
         metrics_list=get_metrics_by_targets(target_names),
         target_names=target_names,
         period_map=period_map,
@@ -114,29 +219,33 @@ def main():
     )
 
     # ===== 日志 & 回调 =====
-    log_root = os.path.join("lightning_logs", "experts", exp_name or "default", model_type)
+    # 组织日志路径：experts/<exp>/<period>/<modality>/<model_type>
+    period = model_cfg.get("period") or inferred.get("period") or "_"
+    modality = model_cfg.get("modality_set") or model_cfg.get("modality") or inferred.get("modality") or "_"
+    log_root = os.path.join("lightning_logs", "experts", exp_name or "default", str(period), str(modality), model_type)
     os.makedirs(log_root, exist_ok=True)
     logger = TensorBoardLogger(log_root, name=model_cfg.get("log_name", "tft_multi"))
+    # 监控指标：统一使用验证损失（按你的要求）
+    monitor_key = "val_loss_epoch"
+    monitor_mode = "min"
+    ckpt_dir = os.path.join("checkpoints", "experts", exp_name or "default", str(period), str(modality), model_type)
     ckpt_cb = ModelCheckpoint(
-        monitor="val_loss_epoch",
-        filename="epoch{epoch:02d}-loss{val_loss_epoch:.4f}",
+        monitor=monitor_key,
+        mode=monitor_mode,
+        filename="epoch{epoch:02d}",
         save_top_k=3,
-        mode="min",
-        dirpath=os.path.join("checkpoints", "experts", exp_name or "default", model_type),
+        save_last=True,
+        dirpath=ckpt_dir,
     )
-    early_stop = EarlyStopping(
-        monitor="val_loss_epoch",
-        patience=model_cfg.get("early_stop_patience", 5),
-        mode="min",
-    )
+    early_stop = EarlyStopping(monitor=monitor_key, patience=model_cfg.get("early_stop_patience", 5), mode=monitor_mode)
 
     # 保存配置文件快照
     os.makedirs(os.path.join(log_root, "configs"), exist_ok=True)
     with open(os.path.join(log_root, "configs", "model_config.yaml"), "w", encoding="utf-8") as f:
         yaml.safe_dump(model_cfg, f)
-    if expert_cfg:
-        with open(os.path.join(log_root, "configs", "targets_used.yaml"), "w", encoding="utf-8") as f:
-            yaml.safe_dump(expert_cfg, f)
+    used = {"expert": exp_name, "model_type": model_type, "targets": targets_override or []}
+    with open(os.path.join(log_root, "configs", "targets_used.yaml"), "w", encoding="utf-8") as f:
+        yaml.safe_dump(used, f)
     
     # ===== 训练 =====
     trainer = Trainer(

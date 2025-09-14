@@ -5,6 +5,7 @@ import torch.nn.functional as F
 from lightning.pytorch import LightningModule
 from torch.optim.lr_scheduler import OneCycleLR
 from pytorch_forecasting.models import TemporalFusionTransformer
+from pytorch_forecasting.metrics import MultiLoss, MAE
 import torchmetrics
 import matplotlib.pyplot as plt
 from sklearn.metrics import ConfusionMatrixDisplay
@@ -93,10 +94,14 @@ class MyTFTModule(LightningModule):
             self.sym2idx = norm_pack.get("sym2idx", {})
             self.per2idx = norm_pack.get("per2idx", {})
 
+        # ensure TFT gets a MultiLoss when there are multiple targets to satisfy
+        # pytorch_forecasting's internal assertion, even though we compute loss externally
         tft_kwargs.pop("loss", None)
         tft_kwargs.pop("output_size", None)
+        n_targets = len(output_size) if isinstance(output_size, (list, tuple)) else 1
+        safe_loss = MAE() if n_targets == 1 else MultiLoss([MAE()] * n_targets)
         self.model = TemporalFusionTransformer.from_dataset(
-            dataset, loss=None, output_size=output_size, **tft_kwargs
+            dataset, loss=safe_loss, output_size=output_size, **tft_kwargs
         )
         for m in self.model.modules():
             if hasattr(m, "mask_bias"):
@@ -162,6 +167,8 @@ class MyTFTModule(LightningModule):
         if not self.reg_indices or self.means_tbl.numel() <= 1:
             return y_enc
         y_std = y_enc.clone()
+        sym_idx = sym_idx.to(self.means_tbl.device)
+        per_idx = per_idx.to(self.means_tbl.device)
         means_b = self.means_tbl[sym_idx, per_idx, :]
         stds_b = torch.clamp(self.stds_tbl[sym_idx, per_idx, :], min=1e-8)
         for local_t, global_t in enumerate(self.reg_indices):
@@ -173,6 +180,8 @@ class MyTFTModule(LightningModule):
             return preds_bt, y_enc
         preds = preds_bt.clone()
         ys = y_enc.clone()
+        sym_idx = sym_idx.to(self.means_tbl.device)
+        per_idx = per_idx.to(self.means_tbl.device)
         means_b = self.means_tbl[sym_idx, per_idx, :]
         stds_b = torch.clamp(self.stds_tbl[sym_idx, per_idx, :], min=1e-8)
         for local_t, global_t in enumerate(self.reg_indices):
@@ -193,6 +202,75 @@ class MyTFTModule(LightningModule):
         cat = torch.cat([t.view(-1, 1).float() for t in y_list], dim=1)
         return cat.to(device) if device else cat
 
+    def _parse_y_to_list(self, y, n_targets_expected: int | None = None):
+        """Convert various y formats from TimeSeriesDataSet to a list of 1D tensors (per-target).
+
+        Handles:
+        - y as Tensor with shapes [B], [B, 1], [B, T], [B, 1, T] (T = n_targets)
+        - y as list/tuple of tensors (drops None if present)
+        - y as tuple like (y, weights) -> uses first element
+        """
+        # unwrap (y, weights) style tuples
+        if isinstance(y, tuple) and len(y) == 2:
+            if torch.is_tensor(y[0]) and (y[1] is None or torch.is_tensor(y[1])):
+                y = y[0]
+            elif isinstance(y[0], (list, tuple)) and all((t is None or torch.is_tensor(t)) for t in y[0]):
+                y = y[0]
+
+        y_list: list[torch.Tensor] = []
+        if torch.is_tensor(y):
+            # normalize to [B, T]
+            if y.dim() == 1:
+                y2 = y.view(-1, 1)
+            elif y.dim() == 2:
+                y2 = y
+            elif y.dim() == 3:
+                # try squeeze prediction length dim
+                if y.size(1) == 1:
+                    y2 = y[:, 0, :]
+                elif y.size(2) == 1:
+                    y2 = y[:, :, 0]
+                else:
+                    # fallback: flatten middle dims and try to split later
+                    y2 = y.view(y.size(0), -1)
+            else:
+                raise RuntimeError(f"Unsupported y tensor shape: {tuple(y.shape)}")
+            # if single target, y2 could be [B, 1]
+            if y2.dim() == 1:
+                y2 = y2.view(-1, 1)
+            # if expected number of targets known and matches, split columns
+            n_cols = y2.size(1)
+            if n_targets_expected is not None and n_cols != n_targets_expected:
+                # try to coerce [B] -> [B, 1] handled above, else accept as-is
+                pass
+            if n_cols == 1 and (n_targets_expected == 1 or n_targets_expected is None):
+                y_list = [y2[:, 0].contiguous().view(-1)]
+            else:
+                y_list = [y2[:, i].contiguous().view(-1) for i in range(n_cols)]
+        elif isinstance(y, (list, tuple)):
+            # treat as per-target list; drop None safely
+            for t in y:
+                if t is None:
+                    continue
+                if not torch.is_tensor(t):
+                    raise RuntimeError(f"y contains non-tensor element: {type(t)}")
+                tt = t
+                # remove trivial dims like [B, 1]
+                if tt.dim() >= 2:
+                    # prefer squeezing last then second dim (prediction length)
+                    tt = tt.squeeze(-1)
+                    if tt.dim() >= 2:
+                        tt = tt.squeeze(1)
+                y_list.append(tt.contiguous().view(-1))
+        else:
+            raise RuntimeError(f"Unsupported y type: {type(y)}")
+
+        if n_targets_expected is not None and len(y_list) != n_targets_expected:
+            raise RuntimeError(
+                f"Parsed y targets {len(y_list)} != expected {n_targets_expected}. Shapes/types may be inconsistent."
+            )
+        return y_list
+
     def forward(self, x):
         x = self._to_dev(x, self.device)
         out = self.model(x)["prediction"]
@@ -209,9 +287,12 @@ class MyTFTModule(LightningModule):
                 ten = x[name]
                 if not torch.isfinite(ten).all():
                     raise RuntimeError(f"[{stage}] {name} has NaN/Inf")
-        y_list = y[0] if isinstance(y, (list, tuple)) else [y]
-        y_enc = self._stack_y(y_list, self.device)
+        # predictions list length equals number of targets when output_size is a list
         pred_list = self.forward(x)
+        n_targets = len(pred_list)
+        # robustly parse y from dataset into per-target vectors
+        y_list = self._parse_y_to_list(y, n_targets_expected=n_targets)
+        y_enc = self._stack_y(y_list, self.device)
         sym_idx, per_idx = self._batch_sym_per_idx(x)
         y_for_loss = self._standardize_y(y_enc, sym_idx, per_idx)
         weighted_total, sub_losses = self.loss_fn(
@@ -284,12 +365,32 @@ class MyTFTModule(LightningModule):
 
     def on_train_epoch_start(self):
         if self.current_epoch in self.loss_schedule:
-            new = torch.tensor(
-                self.loss_schedule[self.current_epoch],
-                dtype=self.loss_fn.w.dtype,
-                device=self.loss_fn.w.device,
-            )
-            self.loss_fn.w.copy_(new.view_as(self.loss_fn.w))
+            vals = self.loss_schedule[self.current_epoch]
+            expected = int(self.loss_fn.w.numel())
+            device = self.loss_fn.w.device
+            dtype = self.loss_fn.w.dtype
+
+            w_new = None
+            # allow dict mapping by target name
+            if isinstance(vals, dict) and getattr(self, "target_names", None):
+                w_arr = []
+                for t in self.target_names[:expected]:
+                    w_arr.append(float(vals.get(t, 1.0)))
+                w_new = torch.tensor(w_arr, dtype=dtype, device=device)
+            elif isinstance(vals, (list, tuple)):
+                if len(vals) == expected:
+                    w_new = torch.tensor([float(x) for x in vals], dtype=dtype, device=device)
+                elif len(vals) == 1:
+                    w_new = torch.full((expected,), float(vals[0]), dtype=dtype, device=device)
+                else:
+                    self.print(
+                        f"[warn] loss_schedule length {len(vals)} != expected {expected}; keep previous weights."
+                    )
+            elif isinstance(vals, (int, float)):
+                w_new = torch.full((expected,), float(vals), dtype=dtype, device=device)
+
+            if w_new is not None and w_new.numel() == expected:
+                self.loss_fn.w.copy_(w_new.view_as(self.loss_fn.w))
 
     def predict_step(
         self,
@@ -374,4 +475,3 @@ class MyTFTModule(LightningModule):
                 final_div_factor=float(self.hparams.final_div_factor),
             )
         return {"optimizer": opt, "lr_scheduler": {"scheduler": sched, "interval": "step", "frequency": 1}}
-

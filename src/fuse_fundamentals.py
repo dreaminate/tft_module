@@ -1095,7 +1095,7 @@ def _aggregate_expert_summaries(results: List[Tuple[str, str | None, str | None]
         print(f"[warn] aggregate experts summary failed: {e}")
 
 
-def run_with_config(cfg_path: str = 'configs/fuse_fundamentals.yaml') -> Tuple[str, str | None, str | None] | List[Tuple[str, str | None, str | None]]:
+def run_with_config(cfg_path: str = 'pipelines/configs/fuse_fundamentals.yaml') -> Tuple[str, str | None, str | None] | List[Tuple[str, str | None, str | None]]:
     if not os.path.exists(cfg_path):
         print(f"[warn] config not found: {cfg_path}; use defaults")
         return fuse()
@@ -1254,6 +1254,6 @@ def run_with_config(cfg_path: str = 'configs/fuse_fundamentals.yaml') -> Tuple[s
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description='Fuse fundamentals into merged dataset (configurable via YAML).')
-    ap.add_argument('--config', default='configs/fuse_fundamentals.yaml', help='YAML config path')
+    ap.add_argument('--config', default='pipelines/configs/fuse_fundamentals.yaml', help='YAML config path')
     args = ap.parse_args()
     print(run_with_config(args.config))

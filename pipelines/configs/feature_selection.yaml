@@ -1,0 +1,124 @@
+# Feature screening execution config
+
+# Two core experts: A (long-history core) and B (recent rich features)
+experts:
+  alpha_dir_tft:
+    name: Alpha-Dir-TFT
+    pkl_path: data/merged/expert_minimal/full_merged_with_fundamentals.pkl
+    periods: ["1h", "4h", "1d"]
+    targets: ["target_binarytrend"]
+
+  alpha_ret_tft:
+    name: Alpha-Ret-TFT
+    pkl_path: data/merged/expert_minimal/full_merged_with_fundamentals.pkl
+    periods: ["1h", "4h", "1d"]
+    targets: ["target_logreturn", "target_logsharpe_ratio"]
+
+  risk_tft:
+    name: Risk-TFT
+    pkl_path: data/merged/expert_minimal/full_merged_with_fundamentals.pkl
+    periods: ["1h", "4h", "1d"]
+    targets: ["target_drawdown_prob", "target_max_drawdown", "target_sideway_detect"]
+
+  derivatives_micro:
+    name: Derivatives-Microstructure
+    pkl_path: data/merged/expert_group/fund_plus_onchain_all/full_merged_with_fundamentals.pkl
+    periods: ["1h", "4h"]
+    targets: ["target_binarytrend", "target_logreturn"]
+
+  onchain_fundflow:
+    name: OnChain-FundFlow
+    pkl_path: data/merged/expert_group/fund_plus_onchain_all/full_merged_with_fundamentals.pkl
+    periods: ["1d"]
+    # NOTE: if custom label 'fundflow_strength' exists, replace below
+    targets: ["target_logreturn"]
+
+  regime_gating:
+    name: Regime-Gating
+    pkl_path: data/merged/expert_group/fund_plus_onchain_all/full_merged_with_fundamentals.pkl
+    periods: ["1h", "4h", "1d"]
+    # Placeholder: if you have regime labels, swap in here
+    targets: ["target_sideway_detect"]
+
+  breakout_levels:
+    name: KeyLevels-Breakout
+    pkl_path: data/merged/expert_minimal/full_merged_with_fundamentals.pkl
+    periods: ["1h", "4h", "1d"]
+    targets: ["target_trend_persistence", "target_breakout_count", "target_pullback_prob", "target_sideway_detect"]
+
+  relative_strength:
+    name: Relative-Strength-Cross
+    pkl_path: data/merged/expert_group/fund_plus_onchain_all/full_merged_with_fundamentals.pkl
+    periods: ["1h", "4h", "1d"]
+    targets: ["target_binarytrend", "target_logreturn"]
+
+  factor_bridge:
+    name: Factor-Bridge
+    pkl_path: data/merged/expert_macro/full_merged_with_fundamentals.pkl
+    periods: ["1d"]
+    # Placeholder target for style proxy evaluation
+    targets: ["target_logsharpe_ratio"]
+
+# Split schemes
+splits:
+  # Outer holdout for final judgment (kept untouched during search)
+  outer_val:
+    mode: days         # days | ratio
+    days: 90           # if mode=days
+    ratio: 0.2         # if mode=ratio
+  # Inner rolling splits for stability checks & wrapper search
+  inner:
+    n_splits: 5
+    val_ratio: 0.2
+
+# Time-aware permutation importance (per period)
+permutation:
+  enabled: true
+  method: cyclic_shift      # cyclic_shift | block_shuffle (future: extend)
+  # block length in steps; ensure >= TFT encoder length (36)
+  block_len_by_period:
+    "1h": 36
+    "4h": 36
+    "1d": 36
+  group_cols: ["symbol"]   # align by session/day via grouping; extend if session cols available
+  repeats: 5                # repeats for averaging delta metric
+
+# TFT gating (optional embedded evidence)
+tft_gating:
+  enabled: false
+  ckpt: checkpoints/last.ckpt
+  model_config: configs/experts/Alpha-Dir-TFT/1h/base/model_config.yaml
+  weights_config: configs/weights_config.yaml
+  max_batches: 50
+  tft_bonus: 0.2           # bonus weight when combining with tree+perm scores
+  out_csv: reports/feature_evidence/tft_gating.csv
+
+# Aggregation & core set
+aggregation:
+  weights_yaml: configs/weights_config.yaml
+  topk_core: 128
+  # Stability: fraction of (period,target) pairs where feature is in pairwise topK
+  topk_per_pair: 64
+  min_appear_rate: 0.5     # >=50% of pairs
+
+# Wrapper search budgets (GA/RFE)
+wrapper:
+  method: rfe              # rfe | ga (switch to ga if resources allow)
+  rfe:
+    patience: 10
+    sample_cap: 50000
+  ga:
+    pop: 30
+    gen: 15
+    cx: 0.7
+    mut: 0.1
+    sample_cap: 50000
+
+# Finalization thresholds
+finalize:
+  expert_only_max: 48      # max additional features beyond core per expert
+  max_online_latency_ms: 2000  # hard budget placeholder (not enforced in code yet)
+  outputs:
+    core_summary_csv: reports/feature_evidence/aggregated_core.csv
+    core_allowlist_txt: configs/selected_features.txt
+    optimized_allowlist_txt: reports/feature_evidence/optimized_features.txt

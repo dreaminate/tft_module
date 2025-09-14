@@ -97,15 +97,33 @@ def load_split(
     val_days: int = 30,
     val_ratio: float = 0.2,
     allowlist_path: Optional[str] = None,
+    targets_override: Optional[List[str]] = None,
 ) -> DatasetSplit:
     df = _read_df_prefer_pkl(pkl_path, csv_path)
     df["symbol"], df["period"] = df["symbol"].astype(str), df["period"].astype(str)
-    df["datetime"] = pd.to_datetime(df["datetime"])  # 容错
+    # Robust datetime parsing (mixed formats / numeric timestamps)
+    if "datetime" in df.columns:
+        try:
+            df["datetime"] = pd.to_datetime(df["datetime"], format="mixed", errors="coerce")
+        except TypeError:
+            df["datetime"] = pd.to_datetime(df["datetime"], errors="coerce")
+    if df.get("datetime") is None or df["datetime"].isna().all():
+        if "timestamp" in df.columns:
+            ts = pd.to_numeric(df["timestamp"], errors="coerce")
+            med = float(ts.dropna().median()) if ts.dropna().size else 0.0
+            unit = "ms" if med >= 1e11 else "s"
+            df["datetime"] = pd.to_datetime(ts, unit=unit, errors="coerce")
+        else:
+            df["datetime"] = pd.to_datetime(df["datetime"], errors="coerce")
     df = df.sort_values(["symbol", "period", "datetime"]).copy()
     features = discover_features(df, allowlist_path)
     train_df, val_df = split_train_val(df, val_mode=val_mode, val_days=val_days, val_ratio=val_ratio)
     periods = sorted(df["period"].dropna().astype(str).unique().tolist())
-    return DatasetSplit(train=train_df, val=val_df, features=features, targets=TARGETS, periods=periods)
+    tgs = TARGETS
+    if targets_override:
+        tset = set(TARGETS)
+        tgs = [t for t in targets_override if t in tset]
+    return DatasetSplit(train=train_df, val=val_df, features=features, targets=tgs, periods=periods)
 
 
 def is_classification_target(t: str) -> bool:
@@ -118,4 +136,3 @@ def safe_numeric_copy(df: pd.DataFrame) -> pd.DataFrame:
         if out[c].dtype == object:
             out[c] = pd.to_numeric(out[c], errors="coerce")
     return out
-

@@ -52,7 +52,11 @@ def _eval_subset(features: List[str], train_df: pd.DataFrame, val_df: pd.DataFra
             ytr = tr[t].astype(float); yva = va[t].astype(float)
             est = RandomForestRegressor(n_estimators=200, n_jobs=-1, random_state=42)
             est.fit(Xtr, ytr); pred = est.predict(Xva)
-            sc = -float(mean_squared_error(yva, pred, squared=False))
+            try:
+                rmse = float(mean_squared_error(yva, pred, squared=False))
+            except TypeError:
+                rmse = float(np.sqrt(mean_squared_error(yva, pred)))
+            sc = -rmse
         score_by_target[t] = float(sc); w = float(wmap.get(t, 1.0)); total += w * float(sc); wsum += w
     if wsum <= 0:
         return -1e9, score_by_target
@@ -156,9 +160,10 @@ def main():
     ap.add_argument("--gen", type=int, default=15)
     ap.add_argument("--cx", type=float, default=0.7)
     ap.add_argument("--mut", type=float, default=0.1)
+    ap.add_argument("--pkl", type=str, default=None, help="Override merged dataset PKL path")
     args = ap.parse_args()
     pool = _prep_pool(args.pool, args.core_csv)
-    ds = load_split(val_mode=args.val_mode, val_days=args.val_days, val_ratio=args.val_ratio)
+    ds = load_split(pkl_path=args.pkl or "data/pkl_merged/full_merged.pkl", val_mode=args.val_mode, val_days=args.val_days, val_ratio=args.val_ratio)
     if args.method == "rfe":
         feats, score, det = rfe_search(pool, ds.train, ds.val, ds.targets, args.weights, args.sample_cap)
     else:
@@ -175,4 +180,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

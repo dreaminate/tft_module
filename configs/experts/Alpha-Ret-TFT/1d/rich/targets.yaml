@@ -1,0 +1,7 @@
+model_type: tft
+targets:
+  - target_logreturn
+weights:
+  by_target:
+    target_logreturn: 3.0
+

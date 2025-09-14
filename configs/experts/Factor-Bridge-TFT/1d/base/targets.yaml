@@ -1,0 +1,7 @@
+model_type: tft
+targets:
+  - target_logsharpe_ratio
+weights:
+  by_target:
+    target_logsharpe_ratio: 1.0
+

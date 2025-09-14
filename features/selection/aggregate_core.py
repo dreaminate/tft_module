@@ -45,9 +45,34 @@ def aggregate_tree_perm(in_dir: str) -> pd.DataFrame:
     return pd.concat(rows, ignore_index=True)
 
 
-def build_unified_core(df: pd.DataFrame, weights_yaml: str, topk: int = 128, tft_bonus: float = 0.0, tft_file: str | None = None) -> pd.DataFrame:
+def build_unified_core(
+    df: pd.DataFrame,
+    weights_yaml: str,
+    topk: int = 128,
+    tft_bonus: float = 0.0,
+    tft_file: str | None = None,
+    topk_per_pair: int | None = None,
+    min_appear_rate: float | None = None,
+) -> pd.DataFrame:
     df = df.copy()
     df["score_local"] = 0.5 * df["score_tree"].fillna(0) + 0.5 * df["score_perm"].fillna(0)
+    # appearance rate across (period,target) pairs
+    appear_rate = None
+    if topk_per_pair is not None and topk_per_pair > 0:
+        marks = []
+        for (per, tgt), g in df.groupby(["period", "target"], sort=False):
+            g = g.sort_values("score_local", ascending=False)
+            topk_sub = g.head(int(topk_per_pair))["feature"].astype(str).tolist()
+            marks.extend([(f, per, tgt) for f in topk_sub])
+        if marks:
+            mdf = pd.DataFrame(marks, columns=["feature", "period", "target"]).drop_duplicates()
+            num_pairs = max(1, int(mdf.groupby(["period", "target"]).ngroups))
+            appear = mdf.groupby("feature").size().rename("appear_count").reset_index()
+            appear["appear_rate"] = appear["appear_count"].astype(float) / float(num_pairs)
+            appear_rate = appear[["feature", "appear_rate"]]
+        else:
+            appear_rate = pd.DataFrame({"feature": [], "appear_rate": []})
+
     ft = df.groupby(["feature", "target"], as_index=False)["score_local"].mean().rename(columns={"score_local": "score_tp"})
     weights = load_weights(weights_yaml)
     target_list = sorted(ft["target"].unique().tolist())
@@ -64,6 +89,15 @@ def build_unified_core(df: pd.DataFrame, weights_yaml: str, topk: int = 128, tft
         if "feature" in tft.columns and "score" in tft.columns:
             tft_score = (tft.set_index("feature")["score"] - tft["score"].min()) / max(1e-8, (tft["score"].max() - tft["score"].min()))
             g["score_global"] = g.apply(lambda r: r["score_global"] + tft_bonus * float(tft_score.get(r["feature"], 0.0)), axis=1)
+    # merge appearance rate and filter if requested
+    if appear_rate is not None and not appear_rate.empty:
+        g = g.merge(appear_rate, on="feature", how="left")
+        g["appear_rate"] = g["appear_rate"].fillna(0.0)
+        if isinstance(min_appear_rate, (int, float)) and 0 <= float(min_appear_rate) <= 1:
+            g = g[g["appear_rate"] >= float(min_appear_rate)].copy()
+    else:
+        g["appear_rate"] = np.nan
+
     g = g.sort_values("score_global", ascending=False).reset_index(drop=True)
     g["rank"] = np.arange(1, len(g) + 1)
     g["keep"] = g["rank"] <= int(topk)
@@ -86,11 +120,21 @@ def main():
     ap.add_argument("--topk", type=int, default=128)
     ap.add_argument("--tft-file", type=str, default=None)
     ap.add_argument("--tft-bonus", type=float, default=0.0)
+    ap.add_argument("--topk-per-pair", type=int, default=0)
+    ap.add_argument("--min-appear-rate", type=float, default=0.0)
     ap.add_argument("--out-summary", type=str, default="reports/feature_evidence/aggregated_core.csv")
     ap.add_argument("--out-allowlist", type=str, default="configs/selected_features.txt")
     args = ap.parse_args()
     df = aggregate_tree_perm(args.__dict__["in"])  # avoid keyword
-    core = build_unified_core(df, args.weights, topk=args.topk, tft_bonus=args.tft_bonus, tft_file=args.tft_file)
+    core = build_unified_core(
+        df,
+        args.weights,
+        topk=args.topk,
+        tft_bonus=args.tft_bonus,
+        tft_file=args.tft_file,
+        topk_per_pair=(args.topk_per_pair if args.topk_per_pair and args.topk_per_pair > 0 else None),
+        min_appear_rate=(args.min_appear_rate if args.min_appear_rate and args.min_appear_rate > 0 else None),
+    )
     os.makedirs(os.path.dirname(args.out_summary), exist_ok=True)
     core.to_csv(args.out_summary, index=False)
     print(f"[save] {args.out_summary}")
@@ -99,4 +143,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

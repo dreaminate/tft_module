@@ -1,0 +1,27 @@
+data_path: data/pkl_merged/full_merged.pkl
+expert: Alpha-Dir-TFT
+period: "4h"
+modality_set: base
+
+val_mode: ratio
+val_ratio: 0.2
+val_days: 14
+
+batch_size: 128
+num_workers: 4
+hidden_size: 64
+lstm_layers: 1
+attention_head_size: 2
+dropout: 0.1
+learning_rate: 3.0e-3
+max_epochs: 2
+precision: "16-mixed"
+grad_clip: 0.2
+accumulate: 1
+early_stop_patience: 3
+log_name: Alpha-Dir-TFT_4h_base
+
+loss_schedule:
+  0: [6.0]
+  5: [5.0]
+

@@ -1,0 +1,7 @@
+model_type: tft
+targets:
+  - target_drawdown_prob
+weights:
+  by_target:
+    target_drawdown_prob: 1.5
+

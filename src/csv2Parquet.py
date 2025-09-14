@@ -1,8 +1,8 @@
 """Convert fused CSV (full or slim) to Parquet, aligned with expert folder layout.
 
 Usage:
-  python src/csv2Parquet.py --config configs/fuse_fundamentals.yaml --which full
-  python src/csv2Parquet.py --config configs/fuse_fundamentals.yaml --which slim
+  python src/csv2Parquet.py --config pipelines/configs/fuse_fundamentals.yaml --which full
+  python src/csv2Parquet.py --config pipelines/configs/fuse_fundamentals.yaml --which slim
 """
 
 from pathlib import Path
@@ -121,7 +121,7 @@ def convert_csv_to_parquet(src_file: Path, dst_file: Path, selected_periods: Opt
 
 if __name__ == '__main__':
     ap = argparse.ArgumentParser()
-    ap.add_argument('--config', default='configs/fuse_fundamentals.yaml')
+    ap.add_argument('--config', default='pipelines/configs/fuse_fundamentals.yaml')
     ap.add_argument('--which', choices=['full','slim'], default='full', help='转换 full 或 slim 输出')
     ap.add_argument('--periods', nargs='*', default=["1h","4h","1d"])
     args = ap.parse_args()
