@@ -10,11 +10,13 @@ if __name__ == "__main__":
     from data.load_dataset import get_dataloaders
     from utils.loss_factory import get_losses_by_targets
     from utils.metric_factory import get_metrics_by_targets
+    from utils.mp_start import ensure_start_method
     from utils.checkpoint_utils import load_partial_weights
     from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint, LearningRateMonitor
     from lightning.pytorch.loggers import TensorBoardLogger
     from utils.stage_summary import save_stage_summary
     from tft.utils.run_helper import prepare_run_dirs
+    ensure_start_method()
     torch.set_float32_matmul_precision('medium')
     torch.backends.cudnn.benchmark = True
     # === 读取参数与配置 ===
@@ -85,7 +87,13 @@ if __name__ == "__main__":
     if model_type != "tft":
         raise NotImplementedError(f"model_type '{model_type}' not supported yet")
 
+    output_head_cfg = leaf_targets_obj.get("output_head") or {}
+    symbol_weight_cfg = leaf_targets_obj.get("symbol_weights") or {}
+
     # === 加载数据 ===
+    resolved_period = model_cfg.get("period") or inferred.get("period") or "_"
+    resolved_modality = model_cfg.get("modality_set") or model_cfg.get("modality") or inferred.get("modality") or "_"
+
     # 基于配置过滤周期/符号（若给出）
     cfg_period = model_cfg.get("period") or inferred.get("period")
     cfg_symbols = model_cfg.get("symbols") or ([] if inferred.get("symbol") is None else [inferred.get("symbol")])
@@ -154,7 +162,23 @@ if __name__ == "__main__":
     accum = int(model_cfg.get("accumulate", 1)) or 1
     steps_per_epoch_eff = max(1, steps_per_epoch // accum)
 
+    schema_version = model_cfg.get("schema_version", "schema_v1")
+    data_version = model_cfg.get("data_version", "data_unknown")
+    expert_version = model_cfg.get("expert_version", "expert_unknown")
+    train_window_id = model_cfg.get("train_window_id", "window_unknown")
+
     out_sizes = [1] * len(target_names)
+    cls_keywords = ("binary", "prob", "detect", "outlier")
+    cls_targets = [t for t in target_names if any(k in t for k in cls_keywords)]
+    if cls_targets:
+        primary_target = cls_targets[0]
+        monitor_metric = f"val_{primary_target}_ap@{resolved_period}"
+        monitor_mode = 'max'
+    else:
+        primary_target = target_names[0]
+        monitor_metric = f"val_{primary_target}_rmse@{resolved_period}"
+        monitor_mode = 'min'
+
     output_size_arg = out_sizes[0] if len(out_sizes) == 1 else out_sizes
     model = MyTFTModule(
         dataset=train_ds,
@@ -172,6 +196,15 @@ if __name__ == "__main__":
         lstm_layers=model_cfg["lstm_layers"],
         attention_head_size=model_cfg["attention_head_size"],
         dropout=model_cfg["dropout"],
+        output_head_cfg=output_head_cfg,
+        symbol_weight_map=symbol_weight_cfg,
+        expert_name=exp_name,
+        period_name=str(resolved_period),
+        modality_name=str(resolved_modality),
+        schema_version=schema_version,
+        data_version=data_version,
+        expert_version=expert_version,
+        train_window_id=train_window_id,
     )
 
     # === 加载预训练模型权重（不恢复优化器/epoch） ===
@@ -184,14 +217,14 @@ if __name__ == "__main__":
 
     # === 设置日志与 Callback ===
     run_dirs = prepare_run_dirs()
-    period = model_cfg.get("period") or inferred.get("period") or "_"
-    modality = model_cfg.get("modality_set") or model_cfg.get("modality") or inferred.get("modality") or "_"
+    period = resolved_period
+    modality = resolved_modality
     logs_root = os.path.join("lightning_logs", "experts", exp_name or "default", str(period), str(modality), model_type)
     os.makedirs(logs_root, exist_ok=True)
     logger = TensorBoardLogger(logs_root, name=model_cfg.get("log_name", "tft_multi"))
     # 监控指标：统一使用验证损失
-    monitor_key = "val_loss_epoch"
-    monitor_mode = "min"
+    monitor_key = monitor_metric
+    monitor_mode = monitor_mode
     ckpt_cb = ModelCheckpoint(
         monitor=monitor_key,
         filename="epoch{epoch:02d}",

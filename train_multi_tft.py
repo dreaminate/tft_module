@@ -1,4 +1,4 @@
-import os
+﻿import os
 import yaml
 import torch
 import argparse
@@ -11,6 +11,7 @@ from data.load_dataset import get_dataloaders
 from utils.loss_factory import get_losses_by_targets
 from utils.metric_factory import get_metrics_by_targets
 from lightning.pytorch.callbacks import ModelCheckpoint, LearningRateMonitor
+from utils.mp_start import ensure_start_method
 import warnings
 warnings.filterwarnings(
         "ignore",
@@ -153,6 +154,9 @@ def main():
         leaf_targets_obj = yaml.safe_load(f) or {}
     model_type = leaf_targets_obj.get("model_type", "tft")
     targets_override = (leaf_targets_obj.get("targets", []) or None)
+    output_head_cfg = leaf_targets_obj.get("output_head") or {}
+    symbol_weight_cfg = leaf_targets_obj.get("symbol_weights") or {}
+    symbol_limit = leaf_targets_obj.get("symbols") or None
     if model_type != "tft":
         raise NotImplementedError(f"model_type '{model_type}' not supported yet")
 
@@ -160,6 +164,8 @@ def main():
     # 过滤周期/符号（若配置中给出）
     cfg_period = model_cfg.get("period") or inferred.get("period")
     cfg_symbols = model_cfg.get("symbols") or ([] if inferred.get("symbol") is None else [inferred.get("symbol")])
+    if symbol_limit:
+        cfg_symbols = [str(s) for s in symbol_limit]
     # 权重来源：优先 targets.yaml -> weights.by_target/custom；否则回退叶子 weights_config.yaml；都没有则全1
     weights_section = leaf_targets_obj.get("weights", {}) or {}
     if isinstance(weights_section, dict) and weights_section.get("by_target"):
@@ -195,7 +201,26 @@ def main():
     steps_per_epoch_eff = max(1, steps_per_epoch // accum)
 
     # ===== 构建模型 =====
+    resolved_period = model_cfg.get("period") or inferred.get("period") or "_"
+    resolved_modality = model_cfg.get("modality_set") or model_cfg.get("modality") or inferred.get("modality") or "_"
+
+    schema_version = model_cfg.get("schema_version", "schema_v1")
+    data_version = model_cfg.get("data_version", "data_unknown")
+    expert_version = model_cfg.get("expert_version", "expert_unknown")
+    train_window_id = model_cfg.get("train_window_id", "window_unknown")
+
     out_sizes = [1] * len(target_names)
+    cls_keywords = ("binary", "prob", "detect", "outlier")
+    cls_targets = [t for t in target_names if any(k in t for k in cls_keywords)]
+    if cls_targets:
+        primary_target = cls_targets[0]
+        monitor_metric = f"val_{primary_target}_ap@{resolved_period}"
+        monitor_mode = 'max'
+    else:
+        primary_target = target_names[0]
+        monitor_metric = f"val_{primary_target}_rmse@{resolved_period}"
+        monitor_mode = 'min'
+
     output_size_arg = out_sizes[0] if len(out_sizes) == 1 else out_sizes
     model = MyTFTModule(
         dataset=train_ds,
@@ -211,7 +236,15 @@ def main():
         loss_schedule=model_cfg.get("loss_schedule", {}),
         hidden_size=model_cfg["hidden_size"],
         lstm_layers=model_cfg["lstm_layers"],
-        
+        output_head_cfg=output_head_cfg,
+        symbol_weight_map=symbol_weight_cfg,
+        expert_name=exp_name,
+        period_name=str(resolved_period),
+        modality_name=str(resolved_modality),
+        schema_version=schema_version,
+        data_version=data_version,
+        expert_version=expert_version,
+        train_window_id=train_window_id,
         attention_head_size=model_cfg["attention_head_size"],
         dropout=model_cfg["dropout"],
         log_interval=model_cfg.get("log_interval", 100),
@@ -220,14 +253,14 @@ def main():
 
     # ===== 日志 & 回调 =====
     # 组织日志路径：experts/<exp>/<period>/<modality>/<model_type>
-    period = model_cfg.get("period") or inferred.get("period") or "_"
-    modality = model_cfg.get("modality_set") or model_cfg.get("modality") or inferred.get("modality") or "_"
+    period = resolved_period
+    modality = resolved_modality
     log_root = os.path.join("lightning_logs", "experts", exp_name or "default", str(period), str(modality), model_type)
     os.makedirs(log_root, exist_ok=True)
     logger = TensorBoardLogger(log_root, name=model_cfg.get("log_name", "tft_multi"))
     # 监控指标：统一使用验证损失（按你的要求）
-    monitor_key = "val_loss_epoch"
-    monitor_mode = "min"
+    monitor_key = monitor_metric
+    monitor_mode = monitor_mode
     ckpt_dir = os.path.join("checkpoints", "experts", exp_name or "default", str(period), str(modality), model_type)
     ckpt_cb = ModelCheckpoint(
         monitor=monitor_key,
@@ -243,17 +276,33 @@ def main():
     os.makedirs(os.path.join(log_root, "configs"), exist_ok=True)
     with open(os.path.join(log_root, "configs", "model_config.yaml"), "w", encoding="utf-8") as f:
         yaml.safe_dump(model_cfg, f)
-    used = {"expert": exp_name, "model_type": model_type, "targets": targets_override or []}
+    used = {"expert": exp_name, "model_type": model_type, "targets": targets_override or [], "symbols": cfg_symbols}
     with open(os.path.join(log_root, "configs", "targets_used.yaml"), "w", encoding="utf-8") as f:
         yaml.safe_dump(used, f)
+    symbol_meta = {
+        "symbol_classes": [str(s) for s in (norm_pack or {}).get("symbol_classes", [])],
+        "sym2idx": {str(k): int(v) for k, v in ((norm_pack or {}).get("sym2idx", {}) or {}).items()},
+        "symbol_weights": symbol_weight_cfg,
+    }
+    with open(os.path.join(log_root, "configs", "symbol_mapping.yaml"), "w", encoding="utf-8") as f:
+        yaml.safe_dump(symbol_meta, f)
     
     # ===== 训练 =====
-    trainer = Trainer(
-        
+    devices_cfg = model_cfg.get("devices", 1)
+    strategy = model_cfg.get("strategy")
+    multi_device = False
+    if isinstance(devices_cfg, int):
+        multi_device = devices_cfg != 1
+    elif isinstance(devices_cfg, (list, tuple)):
+        multi_device = len(devices_cfg) > 1
+    if strategy is None and multi_device:
+        strategy = "ddp_find_unused_parameters_true"
+
+    trainer_kwargs = dict(
         log_every_n_steps=1,
         max_epochs=model_cfg["max_epochs"],
         accelerator="gpu",
-        devices=1,
+        devices=devices_cfg,
         precision=model_cfg.get("precision", "bf16-mixed"),
         gradient_clip_val=model_cfg.get("grad_clip", 0.2),
         accumulate_grad_batches=model_cfg.get("accumulate", 1),
@@ -265,8 +314,13 @@ def main():
         logger=logger,
         enable_progress_bar=True,
     )
+    if strategy is not None:
+        trainer_kwargs["strategy"] = strategy
+    trainer = Trainer(**trainer_kwargs)
     trainer.fit(model, train_dataloaders=train_loader, val_dataloaders=val_loader)
 
 if __name__ == "__main__":
+    ensure_start_method()
     main()
 #    python train_multi_tft.py
+

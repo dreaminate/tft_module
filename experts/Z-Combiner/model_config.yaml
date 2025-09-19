@@ -1,0 +1,23 @@
+﻿data_path: datasets/z_train.parquet
+log_dir: lightning_logs/experts/Z-Combiner
+checkpoints_dir: checkpoints/Z-Combiner
+task_type: classification
+target_column: target_binarytrend
+feature_prefixes:
+  - score__
+  - uncertainty__
+  - realized_vol
+  - ewma_vol
+  - volume_change
+  - funding_rate_slope
+  - open_interest_slope
+  - momentum_fast
+  - momentum_slow
+  - atr_slope
+  - structural_gap
+train_ratio: 0.6
+val_ratio: 0.2
+schema_version: schema_v1
+data_version: data_unknown
+expert_version: z_v1
+train_window_id: window_unknown

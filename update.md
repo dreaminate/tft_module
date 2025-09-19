@@ -1,4 +1,28 @@
-# 更新日志
+﻿# 更新日志
+
+## 2025-09-19 — Z 层训练与稳定评估（v0.2）
+
+- `MyTFTModule`：`predict_step` 统一输出 `{score, uncertainty, meta}`，预测落盘 parquet 增补 schema/data/expert/train_window 等元信息；验证阶段新增温度缩放、ECE/Brier、P10/P50/P90 覆盖率与 Pinball Loss，并输出 per-symbol × period 评估报表及 TensorBoard 可靠性曲线。
+- 单指标监控：`train_multi_tft.py` / `train_resume.py` / `warm_start_train.py` 自动按任务选择 `val_*_ap@period` 或 `val_*_rmse@period`，`utils/stage_summary.py` 去除 composite 字段，仅保留 `best_monitor` 与 `best_val_loss`。
+- `pipelines/build_oof_for_z.py`：汇总专家预测、校验版本一致性，结合目标与 Regime 特征生成 `datasets/z_train.parquet`。
+- `features/regime_core.py`：提供波动、量能、资金费率/OI 斜率、动量、ATR 斜率、结构 gap 等核心字段。
+- `experts/Z-Combiner/train_z.py` + `model_config.yaml`：基于 OOF 数据训练二层 Stacking（Logistic/MLP），输出与“等权”“单最佳专家”基线的 PR-AUC/ECE 或 RMSE 对比。
+- `utils/audit_no_leakage.py`：快速检查 `datasets/z_train.parquet` 重复、时序单调与缺失风险。
+- 其它辅助：`metrics/calibration.py`、`utils/eval_report.py`、`scripts/dump_batch.py`、`utils/mp_start.py` 完善校准与并发加载工具链。
+
+变更文件（关键）：
+
+- `models/tft_module.py`
+- `metrics/calibration.py`
+- `utils/eval_report.py`
+- `pipelines/build_oof_for_z.py`
+- `features/regime_core.py`
+- `experts/Z-Combiner/train_z.py`
+- `train_multi_tft.py` / `train_resume.py` / `warm_start_train.py`
+- `utils/stage_summary.py`
+- `utils/audit_no_leakage.py`
+- `scripts/dump_batch.py`
+- `utils/mp_start.py`
 
 ## 2025-09-14 — 基于专家的配置重构（v0.1）
 
@@ -92,3 +116,4 @@
 
 - 若外部脚本/文档仍假定存在 `configs/model_config.yaml`，需改为显式传入 `--config` 或指向某个专家叶子；README 已更新。
 - 运行期验证：建议在本地数据可用时分别跑一次训练与管线，以确认路径迁移无遗漏。
+
