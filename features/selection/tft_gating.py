@@ -9,7 +9,7 @@ from data.load_dataset import get_dataloaders
 from models.tft_module import MyTFTModule
 
 
-def extract_gating_from_ckpt(ckpt_path: str, model_cfg_path: str = "configs/experts/Alpha-Dir-TFT/1h/base/model_config.yaml", weights_cfg_path: str = "configs/weights_config.yaml", max_batches: int = 50) -> pd.DataFrame:
+def extract_gating_from_ckpt(ckpt_path: str, model_cfg_path: str = "configs/experts/Alpha-Dir-TFT/1h/base/model_config.yaml", weights_cfg_path: str = "configs/experts/Alpha-Dir-TFT/1h/base/weights_config.yaml", max_batches: int = 50) -> pd.DataFrame:
     import yaml
     with open(model_cfg_path, "r", encoding="utf-8") as f:
         model_cfg = yaml.safe_load(f)

@@ -23,11 +23,16 @@ def _prep_pool(pool_file: str | None, core_csv: str | None, default_topk: int = 
     raise SystemExit("[err] no candidate feature list provided (pool_file/core_csv missing)")
 
 
-def _eval_subset(features: List[str], train_df: pd.DataFrame, val_df: pd.DataFrame, targets: List[str], weights_yaml: str, sample_cap: int | None = None) -> Tuple[float, Dict[str, float]]:
+def _eval_subset(features: List[str], train_df: pd.DataFrame, val_df: pd.DataFrame, targets: List[str], weights_yaml: str | None, sample_cap: int | None = None) -> Tuple[float, Dict[str, float]]:
     import yaml
-    with open(weights_yaml, "r", encoding="utf-8") as f:
-        wcfg = yaml.safe_load(f)
-    wlist = [float(x) for x in wcfg.get("custom_weights", [1.0] * len(targets))]
+    wlist = [1.0] * len(targets)
+    if weights_yaml and os.path.exists(weights_yaml):
+        try:
+            with open(weights_yaml, "r", encoding="utf-8") as f:
+                wcfg = yaml.safe_load(f) or {}
+            wlist = [float(x) for x in (wcfg.get("custom_weights") or wlist)]
+        except Exception:
+            pass
     wmap = {t: float(w) for t, w in zip(targets, wlist)}
     tr = train_df.copy(); va = val_df.copy(); cols = [c for c in features if c in tr.columns]
     if not cols:
@@ -154,7 +159,7 @@ def main():
     ap.add_argument("--val-days", type=int, default=30)
     ap.add_argument("--val-ratio", type=float, default=0.2)
     ap.add_argument("--sample-cap", type=int, default=50000)
-    ap.add_argument("--weights", type=str, default="configs/weights_config.yaml")
+    ap.add_argument("--weights", type=str, default=None)
     ap.add_argument("--out", type=str, default="reports/feature_evidence/optimized_features.txt")
     ap.add_argument("--pop", type=int, default=30)
     ap.add_argument("--gen", type=int, default=15)

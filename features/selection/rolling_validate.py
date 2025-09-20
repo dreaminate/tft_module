@@ -11,11 +11,16 @@ from sklearn.metrics import f1_score, mean_squared_error
 from .common import load_split, is_classification_target, safe_numeric_copy
 
 
-def _evaluate(features: List[str], train_df: pd.DataFrame, val_df: pd.DataFrame, targets: List[str], weights_yaml: str) -> float:
+def _evaluate(features: List[str], train_df: pd.DataFrame, val_df: pd.DataFrame, targets: List[str], weights_yaml: str | None) -> float:
     import yaml
-    with open(weights_yaml, "r", encoding="utf-8") as f:
-        cfg = yaml.safe_load(f)
-    ws = [float(x) for x in cfg.get("custom_weights", [1.0] * len(targets))]
+    ws = [1.0] * len(targets)
+    if weights_yaml and os.path.exists(weights_yaml):
+        try:
+            with open(weights_yaml, "r", encoding="utf-8") as f:
+                cfg = yaml.safe_load(f) or {}
+            ws = [float(x) for x in (cfg.get("custom_weights") or ws)]
+        except Exception:
+            pass
     wmap = {t: float(w) for t, w in zip(targets, ws)}
     cols = [c for c in features if c in train_df.columns]
     if not cols:
@@ -75,7 +80,7 @@ def main():
     ap.add_argument("--val-days", type=int, default=30)
     ap.add_argument("--val-ratio", type=float, default=0.2)
     ap.add_argument("--splits", type=int, default=5)
-    ap.add_argument("--weights", type=str, default="configs/weights_config.yaml")
+    ap.add_argument("--weights", type=str, default=None)
     ap.add_argument("--periods", type=str, default=None)
     ap.add_argument("--pkl", type=str, default=None, help="Override merged dataset PKL path")
     args = ap.parse_args()

@@ -20,7 +20,8 @@
   python -c "from src.fuse_fundamentals import run_with_config; run_with_config('pipelines/configs/fuse_fundamentals.yaml')"
   ```
 
-- `experts_map` 中每位专家包含 base / rich 两份配置：
+- 每位专家的具体字段配置存放在 `configs/experts/<Expert>/datasets/base.yaml` 与 `configs/experts/<Expert>/datasets/rich.yaml`；`experts_map` 只引用这些文件，便于按专家自管理。
+- 配置约定：
   - `*_base`：`dataset_type=fundamentals_only`，`max_missing_ratio=0.01`（缺失率>1% 的样本行被删除），默认不启用交集裁剪，适合覆盖早期样本。
   - `*_rich`：`dataset_type=combined`，`max_missing_ratio: null`，保留所有链上指标，由 `no_nan_policy(scope:onchain, method:intersect)` 对链上列求交集，适合近段完整数据。
   - `extra_field` 将所有输出命名为 `<Expert>_<base|rich>` 并写入 `data/merged/expert_group/<Expert>_<base|rich>/`。
@@ -191,7 +192,7 @@ tft_module/
    - 若需要生成或更新基础数据，可先运行你们的 ETL/特征工程脚本（详见 `src/` 中的数据处理流程）。
 
 2. **融合基本面 / 链上数据**
-   - 根据专家需求调整 `pipelines/configs/fuse_fundamentals.yaml` 中的 `experts_map`（base & rich）。
+   - 根据专家需求编辑 `configs/experts/<Expert>/datasets/{base,rich}.yaml`（控制 `include_symbol` / `include_global` / 裁剪策略），`pipelines/configs/fuse_fundamentals.yaml` 负责引用这些文件。
    - 执行：
      ```bash
      python -c "from src.fuse_fundamentals import run_with_config; run_with_config('pipelines/configs/fuse_fundamentals.yaml')"
@@ -200,7 +201,7 @@ tft_module/
 
 3. **配置专家训练**
    - 为每位专家在 `configs/experts/<Expert>/<period>/<modality>/` 下准备好 `model_config.yaml`、`targets.yaml`、`weights_config.yaml`。
-   - 需要迁移或复用权重时，可在 `weights_config.yaml` 中调整目标权重。
+   - 训练脚本直接读取叶子 `targets.yaml` / `weights_config.yaml`，默认不再依赖根目录的旧版配置；需要迁移或复用权重时，修改叶子下的 `weights_config.yaml` 即可。
 
 4. **启动训练 / 续训 / 热启动**
    ```bash

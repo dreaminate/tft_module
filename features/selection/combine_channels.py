@@ -110,14 +110,15 @@ def combine_channels(
     # try to take from weights_yaml.custom_weights matching sorted unique targets
     target_list = sorted(ft["target"].unique().tolist())
     w_map = {t: 1.0 for t in target_list}
-    try:
-        with open(weights_yaml, "r", encoding="utf-8") as f:
-            wc = yaml.safe_load(f)
-        ws = [float(x) for x in wc.get("custom_weights", [])]
-        if len(ws) == len(target_list):
-            w_map = {t: float(w) for t, w in zip(target_list, ws)}
-    except Exception:
-        pass
+    if weights_yaml:
+        try:
+            with open(weights_yaml, "r", encoding="utf-8") as f:
+                wc = yaml.safe_load(f) or {}
+            ws = [float(x) for x in (wc.get("custom_weights") or [])]
+            if len(ws) == len(target_list):
+                w_map = {t: float(w) for t, w in zip(target_list, ws)}
+        except Exception:
+            pass
     ft["w"] = ft["target"].map(w_map).astype(float)
     g = ft.groupby("feature", as_index=False).apply(lambda gdf: pd.Series({
         "score_global": float((gdf["score_tp"] * gdf["w"]).sum() / max(1e-8, gdf["w"].sum()))
@@ -139,7 +140,7 @@ def main():
     ap = argparse.ArgumentParser(description="Combine base & rich channel evidences via validation-gated fusion")
     ap.add_argument("--base", type=str, required=True)
     ap.add_argument("--rich", type=str, required=True)
-    ap.add_argument("--weights", type=str, default="configs/weights_config.yaml")
+    ap.add_argument("--weights", type=str, default=None)
     ap.add_argument("--topk", type=int, default=128)
     ap.add_argument("--topk-per-pair", type=int, default=64)
     ap.add_argument("--min-appear-rate", type=float, default=0.5)
@@ -167,4 +168,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

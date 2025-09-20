@@ -88,14 +88,14 @@ tft_gating:
   enabled: false
   ckpt: checkpoints/last.ckpt
   model_config: configs/experts/Alpha-Dir-TFT/1h/base/model_config.yaml
-  weights_config: configs/weights_config.yaml
+  weights_config: configs/experts/Alpha-Dir-TFT/1h/base/weights_config.yaml
   max_batches: 50
   tft_bonus: 0.2           # bonus weight when combining with tree+perm scores
   out_csv: reports/feature_evidence/tft_gating.csv
 
 # Aggregation & core set
 aggregation:
-  weights_yaml: configs/weights_config.yaml
+  weights_yaml: null
   topk_core: 128
   # Stability: fraction of (period,target) pairs where feature is in pairwise topK
   topk_per_pair: 64

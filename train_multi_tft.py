@@ -41,7 +41,7 @@ def _load_targets(expert: str | None = None):
         return None
     entry = experts.get(exp, None)
     if not entry:
-        raise ValueError(f"Expert '{exp}' not found in configs/targets.yaml")
+        return None
     model_type = entry.get("model_type", "tft")
     targets = entry.get("targets", [])
     return {"expert": exp, "model_type": model_type, "targets": targets}
@@ -70,7 +70,7 @@ def _parse_args():
         "--expert",
         type=str,
         default=None,
-        help="Override expert name to use from configs/targets.yaml",
+        help="Override expert name（默认读取叶子 targets.yaml，必要时可指定全局 fallback）",
     )
     return parser.parse_args()
 

@@ -4,6 +4,13 @@
 
 # 专家体系总览（8 + 1 组合器）
 
+> **当前实现总览**
+>
+> - 数据只保留一张长表：所有专家（Base/Rich）在融合后得到的 `full_merged_with_fundamentals.{csv,pkl}` 仍包含 1h/4h/1d 全部周期，慢频链上/宏观指标经过 `shift → ffill` 广播到高频行。
+> - 每位专家的融合字段配置集中在 `configs/experts/<Expert>/datasets/{base,rich}.yaml`，`pipelines/configs/fuse_fundamentals.yaml` 仅作为调度入口引用这些文件。
+> - 训练阶段由 DataLoader 根据叶子 `model_config.yaml` 中的 `period`（以及 `symbols` 可选）过滤出对应子集，确保同一长表即可支持多周期训练。
+> - 叶子目录必须自带 `model_config.yaml` / `targets.yaml` / `weights_config.yaml`（Base 与 Rich 均有），训练脚本默认读取叶子文件，不再依赖根目录旧版配置。
+
 > 统一原则：**每位专家 × 每周期（1h/4h/1d）= 1 份共享骨干 Multi-TFT**；下挂**多符号输出头/Adapter**（BTC/ETH/BNB/SOL/ADA…）。再按模态分 **Base（普适） / Rich（富模态）** 两条通道**并行产出**，由门控 $\alpha_t$ 做**软融合**；Rich 不可用时 $\alpha_t=0$ 自然**回退** Base。
 > 若出现**长期负迁移/强独占模态**且 A+C 仍不够，再把极少数“问题币”升格为 **B 方案：单币小 TFT 微调**（兜底）。
 
@@ -352,4 +359,3 @@ logging:
 **一句话总括**：
 
 > 专家清单 8+1、职责清晰；**每专家×每周期**一份共享骨干 Multi-TFT + **多符号头/Adapter**；**Base 与 Rich 并行融合**（$\alpha$ 门控），缺失时自然回退；多证据+时间友好选特征，**嵌套时序 CV**裁决；Z 层完成权重路由、风格与风险约束；B 方案仅对极少数币兜底微调。以上规范**完备、可执行、可审计**。
-

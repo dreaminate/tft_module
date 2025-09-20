@@ -31,7 +31,7 @@ if __name__ == "__main__":
         "--expert",
         type=str,
         default=None,
-        help="Override expert name to use from configs/targets.yaml",
+        help="Override expert name（默认读取叶子 targets.yaml，可指定全局 fallback）",
     )
     args = parser.parse_args()
     cfg_path = args.config
@@ -54,7 +54,7 @@ if __name__ == "__main__":
             return None
         entry = experts.get(exp, None)
         if not entry:
-            raise ValueError(f"Expert '{exp}' not found in configs/targets.yaml")
+            return None
         model_type = entry.get("model_type", "tft")
         targets = entry.get("targets", [])
         return {"expert": exp, "model_type": model_type, "targets": targets}

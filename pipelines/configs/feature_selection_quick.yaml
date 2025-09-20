@@ -31,7 +31,7 @@ permutation:
   repeats: 3
 
 aggregation:
-  weights_yaml: configs/weights_config.yaml
+  weights_yaml: null
   topk_core: 96
   topk_per_pair: 48
   min_appear_rate: 0.5

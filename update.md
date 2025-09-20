@@ -1,5 +1,26 @@
 ﻿# 更新日志
 
+## 2025-09-20 — 专家数据管线与文档梳理（v0.2.1）
+
+- **专家数据集重构**：`pipelines/configs/fuse_fundamentals.yaml` 的 `experts_map` 统一采用 `<Expert>_{base|rich}` 命名，融合输出落入 `data/merged/expert_group/<Expert>_{base|rich}/`，旧的 `baseline` / `expert_*` 等目录已清理。
+- **缺失率 / 交集逻辑增强**：`src/fuse_fundamentals.py` 引入 `max_missing_ratio` 行裁剪与全空列过滤；`dataset_group_summary.csv` 记录 `missing_threshold_rows`、`missing_threshold_cols_count`、`intersect_all_null_cols_count` 并生成 `missing_threshold_columns.txt`。
+- **配置补全**：所有专家叶子（base & rich）新增 `weights_config.yaml`；每位专家新增 `datasets/base.yaml` 与 `datasets/rich.yaml` 存放融合字段配置，并在 `experts_map` 中引用对应路径；特征筛选配置 `feature_selection(.yaml|_quick.yaml)` 的 `pkl_path` 调整为指向最新专家数据目录。
+- **README 更新**：补充“数据融合”与“快速上手”章节，详细说明 `expert_group` 目录结构及运行命令。
+- **数据清理**：删除 `data/merged/` 与 `data/merged/expert_group/` 下的遗留主题目录，仅保留按专家划分的数据集。
+- **汇总报表更新**：`reports/datasets/experts_group_summary.csv` 汇聚所有 `<Expert>_{base|rich}` 数据，便于巡检缺失率与样本范围。
+- **全局配置瘦身**：删除根目录 `configs/targets.yaml`/`configs/weights_config.yaml`；训练与特征筛选脚本改为依赖各专家叶子下的 `targets.yaml`、`weights_config.yaml`，其余工具默认在缺省权重时使用均值策略。
+- **文档同步**：`experts.md` 新增“当前实现总览”小节，说明长表数据结构、慢频广播、专家 `datasets/{base,rich}.yaml` 配置、以及训练阶段按 `period` 过滤的方式。
+
+变更文件（关键）：
+
+- `README.md`
+- `pipelines/configs/fuse_fundamentals.yaml`
+- `pipelines/configs/feature_selection.yaml`
+- `pipelines/configs/feature_selection_quick.yaml`
+- `src/fuse_fundamentals.py`
+- `reports/datasets/experts_group_summary.csv`
+- `configs/experts/**/weights_config.yaml`
+
 ## 2025-09-19 — Z 层训练与稳定评估（v0.2）
 
 - `MyTFTModule`：`predict_step` 统一输出 `{score, uncertainty, meta}`，预测落盘 parquet 增补 schema/data/expert/train_window 等元信息；验证阶段新增温度缩放、ECE/Brier、P10/P50/P90 覆盖率与 Pinball Loss，并输出 per-symbol × period 评估报表及 TensorBoard 可靠性曲线。

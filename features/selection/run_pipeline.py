@@ -14,7 +14,7 @@ def main():
     ap.add_argument("--val-ratio", type=float, default=0.2)
     ap.add_argument("--preview", type=int, default=10)
     ap.add_argument("--tree-out", type=str, default="reports/feature_evidence/tree_perm")
-    ap.add_argument("--weights", type=str, default="configs/weights_config.yaml")
+    ap.add_argument("--weights", type=str, default=None)
     ap.add_argument("--tft-gating", type=str, default=None)
     ap.add_argument("--tft-bonus", type=float, default=0.0)
     ap.add_argument("--topk", type=int, default=128)

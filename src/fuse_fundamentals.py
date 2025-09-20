@@ -1225,10 +1225,27 @@ def run_with_config(cfg_path: str = 'pipelines/configs/fuse_fundamentals.yaml') 
         if selected:
             keys = [k for k in keys if k in selected]
         for name in keys:
-            ex = experts_map.get(name) or {}
+            entry = experts_map.get(name)
             name = str(name).strip()
             if not name:
                 continue
+
+            cfg_path = None
+            ex: Dict[str, Any]
+            if isinstance(entry, str):
+                cfg_path = entry
+                ex = _load_yaml(entry) or {}
+            elif isinstance(entry, dict):
+                ex = dict(entry)
+                cfg_path = ex.pop('config_path', None)
+                if cfg_path:
+                    file_cfg = _load_yaml(cfg_path) or {}
+                    merged: Dict[str, Any] = dict(file_cfg)
+                    merged.update(ex)
+                    ex = merged
+            else:
+                ex = {}
+
             base_csv = cfg.get('base_csv', 'data/merged/full_merged.csv')
             out_csv = cfg.get('out_csv', 'data/merged/full_merged_with_fundamentals.csv')
             slim_csv = cfg.get('slim_csv', 'data/merged/full_merged_slim.csv')
@@ -1237,17 +1254,20 @@ def run_with_config(cfg_path: str = 'pipelines/configs/fuse_fundamentals.yaml') 
             report_dir = cfg.get('report_dir', 'data/merged/fuse_audit')
 
             inc_sym = dict(cfg.get('include_symbol') or {})
-            inc_sym.update((ex or {}).get('include_symbol') or {})
+            inc_sym.update(ex.get('include_symbol') or {})
             inc_glb = dict(cfg.get('include_global') or {})
-            inc_glb_src = (ex or {}).get('include_global')
+            inc_glb_src = ex.get('include_global')
             if isinstance(inc_glb_src, dict):
                 inc_glb.update(inc_glb_src)
 
-            ds_type = (ex or {}).get('dataset_type', cfg.get('dataset_type'))
-            nn_policy = (ex or {}).get('no_nan_policy', cfg.get('no_nan_policy'))
+            ds_type = ex.get('dataset_type', cfg.get('dataset_type'))
+            nn_policy = ex.get('no_nan_policy', cfg.get('no_nan_policy'))
 
-            ef = dict(cfg.get('extra_field') or {})
-            ef['name'] = name
+            if ex.get('extra_field'):
+                ef = dict(ex.get('extra_field') or {})
+            else:
+                ef = dict(cfg.get('extra_field') or {})
+                ef.setdefault('name', name)
 
             out_csv_i, slim_csv_i, cols_txt_i = fuse(
                 base_csv=base_csv,
@@ -1267,10 +1287,12 @@ def run_with_config(cfg_path: str = 'pipelines/configs/fuse_fundamentals.yaml') 
                 'name': name,
                 'include_symbol': inc_sym,
                 'include_global': inc_glb,
-                'post_convert': (ex or {}).get('post_convert', cfg.get('post_convert')),
+                'post_convert': ex.get('post_convert', cfg.get('post_convert')),
             }
+            if cfg_path:
+                eff_cfg['config_path'] = cfg_path
             _dump_config_snapshot(os.path.dirname(out_csv_i), eff_cfg)
-            _post_convert_full(out_csv_i, (ex or {}).get('post_convert', cfg.get('post_convert')))
+            _post_convert_full(out_csv_i, ex.get('post_convert', cfg.get('post_convert')))
             results.append((out_csv_i, slim_csv_i, cols_txt_i))
         _aggregate_expert_summaries(results, cfg)
         return results

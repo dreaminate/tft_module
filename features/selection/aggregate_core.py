@@ -12,11 +12,11 @@ def _rank01(series: pd.Series, ascending: bool = False) -> pd.Series:
     return series.rank(method="average", ascending=ascending, na_option="keep").astype(float) / series.count()
 
 
-def load_weights(yaml_path: str) -> List[float]:
-    if not os.path.exists(yaml_path):
+def load_weights(yaml_path: str | None) -> List[float]:
+    if not yaml_path or not os.path.exists(yaml_path):
         return []
     with open(yaml_path, "r", encoding="utf-8") as f:
-        cfg = yaml.safe_load(f)
+        cfg = yaml.safe_load(f) or {}
     ws = cfg.get("custom_weights", [])
     return [float(w) for w in ws]
 
@@ -116,7 +116,7 @@ def export_selected_features(df: pd.DataFrame, out_txt: str) -> None:
 def main():
     ap = argparse.ArgumentParser(description="Aggregate per-period importances and produce unified core set")
     ap.add_argument("--in", type=str, default="reports/feature_evidence/tree_perm")
-    ap.add_argument("--weights", type=str, default="configs/weights_config.yaml")
+    ap.add_argument("--weights", type=str, default=None)
     ap.add_argument("--topk", type=int, default=128)
     ap.add_argument("--tft-file", type=str, default=None)
     ap.add_argument("--tft-bonus", type=float, default=0.0)

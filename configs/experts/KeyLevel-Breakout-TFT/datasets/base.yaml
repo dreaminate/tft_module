@@ -1,0 +1,32 @@
+dataset_type: fundamentals_only
+max_missing_ratio: 0.01
+no_nan_policy:
+  enabled: false
+include_symbol:
+  funding_oi: true
+  funding_vol: false
+  oi: true
+  ls_global: true
+  ls_top_acc: true
+  ls_top_pos: true
+  basis: true
+  whale: true
+  taker: true
+  cgdi: true
+  cdri: true
+  borrow_interest: true
+include_global: {}
+extra_field:
+  name: KeyLevel-Breakout-TFT
+  value: base
+  append_to_filename: both
+  group_to_folder: true
+  folder_mode: both
+  folder_root: data/merged/expert_group
+post_convert:
+  pkl: true
+  parquet: false
+  periods:
+  - 1h
+  - 4h
+  - 1d

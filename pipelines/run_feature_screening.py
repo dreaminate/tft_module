@@ -46,7 +46,7 @@ def main():
     wrapper = cfg.get("wrapper", {})
     finalize = cfg.get("finalize", {})
 
-    weights_yaml = agg.get("weights_yaml", "configs/weights_config.yaml")
+    weights_yaml = agg.get("weights_yaml")
     tree_out_root = "reports/feature_evidence"
     core_summary_csv = finalize.get("outputs", {}).get("core_summary_csv", f"{tree_out_root}/aggregated_core.csv")
     core_allowlist_txt = finalize.get("outputs", {}).get("core_allowlist_txt", "configs/selected_features.txt")
