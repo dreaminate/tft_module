@@ -11,6 +11,47 @@
 - **OOF ↦ Z 层训练闭环**：`pipelines/build_oof_for_z.py` 汇总各专家预测、校验版本一致性，生成 `datasets/z_train.parquet`；`experts/Z-Combiner/train_z.py` 基于 OOF 数据训练二层 Stacking（Logistic / MLP），并与“等权”“单最佳专家”基线比较。
 - **无泄漏审计**：`utils/audit_no_leakage.py` 快速检测 `z_train.parquet` 是否存在重复、时间倒退、缺失或时间间隔异常。
 
+## 数据融合（Fundamentals + On-chain）
+
+- 主流程：`src/fuse_fundamentals.py` → `fuse()`；推荐通过 `pipelines/configs/fuse_fundamentals.yaml` + `run_with_config()` 驱动。
+- 执行命令：
+
+  ```bash
+  python -c "from src.fuse_fundamentals import run_with_config; run_with_config('pipelines/configs/fuse_fundamentals.yaml')"
+  ```
+
+- `experts_map` 中每位专家包含 base / rich 两份配置：
+  - `*_base`：`dataset_type=fundamentals_only`，`max_missing_ratio=0.01`（缺失率>1% 的样本行被删除），默认不启用交集裁剪，适合覆盖早期样本。
+  - `*_rich`：`dataset_type=combined`，`max_missing_ratio: null`，保留所有链上指标，由 `no_nan_policy(scope:onchain, method:intersect)` 对链上列求交集，适合近段完整数据。
+  - `extra_field` 将所有输出命名为 `<Expert>_<base|rich>` 并写入 `data/merged/expert_group/<Expert>_<base|rich>/`。
+
+- 运行结束自动生成：
+  - `full_merged_with_fundamentals.{csv,pkl}` 与 `full_merged_slim.csv`；
+  - `fundamental_columns.txt`、`dataset_group_summary.csv`（含 `missing_threshold_rows`、`missing_threshold_cols_count`、`intersect_all_null_cols_count` 等统计）；
+  - `missing_threshold_columns.txt`、`intersect_columns*.txt`、`fuse_audit/*`、`config_snapshot.yaml`；
+  - 汇总报表：`reports/datasets/experts_group_summary.csv`。
+
+- 自定义提示：
+  - 关闭自动裁剪 → `max_missing_ratio` 设为 `null` / 删除，或把 `no_nan_policy.enabled` 设为 `false`。
+  - 精确控制交集列 → `scope: custom` + `columns: [...]`。
+  - 若需直接在代码里控制，可调用：
+
+    ```python
+    from src.fuse_fundamentals import fuse
+
+    fuse(
+        base_csv='data/merged/full_merged.csv',
+        out_csv='data/merged/expert_group/Custom/full_merged_with_fundamentals.csv',
+        include_symbol={'funding_oi': True, 'funding_vol': True, ...},
+        include_global={'premium': True, 'altcoin': True, ...},
+        max_missing_ratio=0.02,
+        no_nan_policy={'enabled': True, 'scope': 'custom', 'method': 'intersect', 'columns': ['premium_premium_index']},
+        validate=True,
+    )
+    ```
+
+  - `post_convert` 会沿用全局配置。如需为单个专家单独设置（仅导出 CSV 或关闭 PKL），可在该条目下覆盖 `post_convert` 字段。
+
 ## 目录结构（核心）
 
 ```
@@ -25,7 +66,9 @@ tft_module/
 ├─ models/
 │  └─ tft_module.py              # MyTFTModule + HybridMultiLoss
 ├─ pipelines/
-│  └─ build_oof_for_z.py         # 汇总专家输出生成 z_train.parquet
+│  ├─ build_oof_for_z.py         # 汇总专家输出生成 z_train.parquet
+│  └─ configs/
+│       └─ fuse_fundamentals.yaml  # 数据融合（Fundamentals + On-chain）配置
 ├─ features/
 │  └─ regime_core.py             # Regime 核心特征计算
 ├─ metrics/
@@ -35,10 +78,23 @@ tft_module/
 │  ├─ audit_no_leakage.py        # OOF 数据检查
 │  ├─ mp_start.py                # Windows 多进程启动补丁
 │  └─ ...                        # loss_factory / metric_factory 等
-└─ scripts/
-   ├─ dump_batch.py              # 调试 DataLoader batch
-   └─ experts_cli.py             # 按专家快速启动（train/resume/warm）
+├─ scripts/
+│  ├─ dump_batch.py              # 调试 DataLoader batch
+│  └─ experts_cli.py             # 按专家快速启动（train/resume/warm）
+└─ data/
+   └─ merged/
+        ├─ full_merged.csv        # 基础 K 线 + 技术指标
+        └─ expert_group/          # 每个专家（base|rich）融合结果
 ```
+
+`data/merged/expert_group/` 是融合脚本的主要输出目录，运行后会为每位专家生成 `<Expert>_base/` 与 `<Expert>_rich/` 两套数据集：
+
+- `full_merged_with_fundamentals.{csv,pkl}`：用于训练/特征筛选的全量列。
+- `full_merged_slim.csv`：核心价量 + 基本面 + 目标的精简版。
+- `fundamental_columns.txt`：新增列清单。
+- `dataset_group_summary.csv`：每个 `(symbol, period)` 的样本数、时间范围，以及 `missing_threshold_rows`、`missing_threshold_cols_count`、`intersect_all_null_cols_count` 等裁剪统计。
+- `missing_threshold_columns.txt` / `intersect_columns*.txt`：当缺失率阈值或交集策略触发时的列记录。
+- `fuse_audit/`：覆盖率报表、时间审计、列统计；`config_snapshot.yaml` 保存本次融合配置。
 
 ## 专家训练流程
 
@@ -125,6 +181,58 @@ tft_module/
 - **校准指标全为 NaN**：检查对应目标是否有正样本 / 负样本，或是否误把回归目标当分类使用。
 - **OOF 数据列缺失**：确保传入的 `full_merged.pkl` 包含所有 `target_*` 列，并且最新预处理已对慢频特征做 shift/ffill。
 - **Z-Combiner 指标不升**：可在配置中增减 `feature_prefixes`、替换模型（例如换成 `Ridge`、`GradientBoosting` 等），或针对分类任务追加更多校准步骤。
+
+## 快速上手（完整流程）
+
+以下步骤将项目从数据准备、专家训练到多专家融合串联起来，帮助新同事快速跑通：
+
+1. **准备基础数据**
+   - 确保 `data/pkl_merged/full_merged.pkl`、`data/merged/full_merged.csv` 已包含核心价量、技术指标与目标列。
+   - 若需要生成或更新基础数据，可先运行你们的 ETL/特征工程脚本（详见 `src/` 中的数据处理流程）。
+
+2. **融合基本面 / 链上数据**
+   - 根据专家需求调整 `pipelines/configs/fuse_fundamentals.yaml` 中的 `experts_map`（base & rich）。
+   - 执行：
+     ```bash
+     python -c "from src.fuse_fundamentals import run_with_config; run_with_config('pipelines/configs/fuse_fundamentals.yaml')"
+     ```
+   - 输出会落在 `data/merged/expert_group/<Expert>_{base|rich}/`；检查 `dataset_group_summary.csv`、`fuse_audit/` 以确认覆盖率与裁剪情况。
+
+3. **配置专家训练**
+   - 为每位专家在 `configs/experts/<Expert>/<period>/<modality>/` 下准备好 `model_config.yaml`、`targets.yaml`、`weights_config.yaml`。
+   - 需要迁移或复用权重时，可在 `weights_config.yaml` 中调整目标权重。
+
+4. **启动训练 / 续训 / 热启动**
+   ```bash
+   python train_multi_tft.py --config configs/experts/Risk-TFT/1h/base/model_config.yaml
+   python train_resume.py    --config configs/experts/Risk-TFT/1h/base/model_config.yaml
+   python warm_start_train.py --config configs/experts/Risk-TFT/1h/rich/model_config.yaml
+   ```
+   - 常用命令可以通过 `scripts/experts_cli.py` 管理（`list`、`train`、`resume`、`warm`）。
+
+5. **生成预测与 OOF 数据**
+   - 训练完成后运行 `Trainer.predict(...)` 或 CLI 中的预测命令，使 `lightning_logs/experts/.../predictions/` 目录生成 `predictions_*.parquet`。
+   - 汇总 OOF：
+     ```bash
+     python pipelines/build_oof_for_z.py --predictions-root lightning_logs \
+       --data-path data/pkl_merged/full_merged.pkl --output datasets/z_train.parquet
+     python utils/audit_no_leakage.py --path datasets/z_train.parquet
+     ```
+
+6. **训练 Z-Combiner / Stack 模型**
+   ```bash
+   python experts/Z-Combiner/train_z.py --config experts/Z-Combiner/model_config.yaml
+   ```
+   - 查看 `lightning_logs/experts/Z-Combiner/metrics_*.json`、`predictions/`、`eval_report_*.csv` 评估融合效果。
+
+7. **可选：特征筛选与证据汇总**
+   - 对某些专家跑特征筛选，可使用 `pipelines/configs/feature_selection(.yaml|_quick.yaml)`；对应 `pkl_path` 已指向最新 `expert_group` 数据。
+   - 运行脚本前确认 `aggregation.weights_yaml`、`wrapper` 参数符合资源预算。
+
+整体流程执行完后，你会得到：
+   - 每位专家（base/rich）的最新模型权重与预测；
+   - `datasets/z_train.parquet` 和训练好的 Z-Combiner；
+   - 报表 / 特征证据输出，便于继续分析和调参。
 
 ---
 

@@ -1,89 +1,48 @@
-# 控制要并入哪些“基本面（宏观/链上/衍生品）”字段；并支持：
-# - 多专家一次性融合（experts_map）；每个专家单独的数据集与目录
-# - 融合后自动校验与自动转存（PKL/Parquet）
-# - 仅基本面 or 基本面+链上，并可对选定列做“无缺失裁剪”（交集窗口）
-
-# 基准输入（来自你当前管线的合并结果）
 base_csv: data/merged/full_merged.csv
-
-# 输出文件（模板名，实际输出会带上目录分组；文件名默认不追加后缀）
 out_csv: data/merged/full_merged_with_fundamentals.csv
 slim_csv: data/merged/full_merged_slim.csv
 cols_txt: data/merged/fundamental_columns.txt
-report_dir: data/merged/fuse_audit           # 校验报表目录模板
-validate: true                               # 是否在融合完成后生成校验报表（只做统计与审计，不改数据）
-
-# 全局缺失裁剪策略（可被每个专家覆盖）
-# dataset_type: 数据集类型
-#   - fundamentals_only: 仅“技术 + 币种基本面”（不并入链上/宏观 index）
-#   - combined         : 基本面 + 链上/宏观（默认）
-# no_nan_policy: “无缺失裁剪”的开关与范围
-#   enabled: true|false      # true 启用；false 不裁剪
-#   scope: onchain|all_new|custom
-#     - onchain: 仅对“链上/宏观”新增列做无缺失约束（推荐）
-#     - all_new: 对“全部新增列（基本面+链上）”做无缺失（更严格）
-#     - custom : 仅对 columns 指定的列名集合做无缺失
-#   method: intersect|drop   # intersect=按组取交集窗口；drop=仅丢缺失行（不保证连续）
-#   columns: []              # scope=custom 时填写列名数组
-dataset_type: combined       # 全局默认：combined（可被每个专家单独覆盖）
-no_nan_policy:               # 全局默认：不裁剪（可被每个专家覆盖）
+report_dir: data/merged/fuse_audit
+validate: true
+dataset_type: combined
+no_nan_policy:
   enabled: false
   scope: onchain
   method: intersect
   columns: []
-
-# 并入：按币种维度（默认都 true）
+max_missing_ratio: 0.01
 include_symbol:
-  funding_oi: true       # 资金费率：OI加权（close）
-  funding_vol: false     # 资金费率：成交量加权（close）
-  oi: true               # OI 派生：oi_mean_oc / oi_vol / oi_mean_oc_z
-  ls_global: true        # 多空比（全体账户）
-  ls_top_acc: true       # 多空比（Top 账户）
-  ls_top_pos: true       # 多空比（Top 持仓）
-  basis: true            # 期现基差 open/close + change
-  whale: true            # 鲸鱼指数
-  taker: true            # 吃单买卖量及不对称度（含 _z）
-  cgdi: true             # 期货 CGDI 指数
-  cdri: true             # 期货 CDRI 指数
-  borrow_interest: true  # 借币利率（Binance）
-
-# 注意：不再提供“全局 include_global 默认”。
-# 请在每个专家条目下单独配置 include_global，避免混淆。
-
-# 目录分组（强烈建议开启）：把每个专家输出放到单独文件夹
-# extra_field:
-#   name: <专家名/数据集名> 将作为文件夹名
-#   append_to_filename: none|name|value|both（默认 none，不在文件名追加）
-#   group_to_folder   : true|false（true 则写入子文件夹）
-#   folder_mode       : name|value|both（子文件夹命名规则；默认 name）
-#   folder_root       : 根目录（统一放置所有专家目录）
+  funding_oi: true
+  funding_vol: false
+  oi: true
+  ls_global: true
+  ls_top_acc: true
+  ls_top_pos: true
+  basis: true
+  whale: true
+  taker: true
+  cgdi: true
+  cdri: true
+  borrow_interest: true
 extra_field:
-  # name 填“专家名/数据集名”，将作为子文件夹名
   name: baseline
-  # 文件名添加方式：none | name | value | both
-  # 例如 both -> *_expert_group-baseline.csv；none -> 不追加
   append_to_filename: none
-  # 是否把输出统一放到一个分组文件夹中（便于管理多个模型/专家）
   group_to_folder: true
-  # 分组文件夹命名方式：name | value | both（默认沿用 append_to_filename 的语义）
   folder_mode: name
-  # 可选：把分组输出放到这个根目录；留空则放在各输出原目录下创建子文件夹
   folder_root: data/merged/expert_group
-
-# 融合完成后是否自动转存（仅 full 版本自动；slim 若需要请单独调用转换脚本）
-post_convert:
+post_convert: &id001
   pkl: true
-  parquet: false     # 若需开启，请确保安装 pyarrow/fastparquet
-  periods: ["1h","4h","1d"]
-
-# 多专家一次性配置（例子）
-# 多专家一次性配置（示例，建议使用字典形式便于解析）
-experts_map:  # 仅保留两份：纯基本面、以及“链上+基本面（链上交集无缺失）”
-
-  tech_fund_only:
-    dataset_type: fundamentals_only   # 仅基本面
+  parquet: false
+  periods:
+  - 1h
+  - 4h
+  - 1d
+experts_map:
+  Alpha-Dir-TFT_base:
+    dataset_type: fundamentals_only
+    max_missing_ratio: 0.01
     no_nan_policy:
-      enabled: false                 # 不做交集裁剪
+      enabled: false
     include_symbol:
       funding_oi: true
       funding_vol: false
@@ -97,12 +56,19 @@ experts_map:  # 仅保留两份：纯基本面、以及“链上+基本面（链
       cgdi: true
       cdri: true
       borrow_interest: true
-    include_global: {}               # 不使用链上
-
-  fund_plus_onchain_all:
-    dataset_type: combined           # 基本面 + 链上
+    include_global: {}
+    extra_field:
+      name: Alpha-Dir-TFT
+      value: base
+      append_to_filename: both
+      group_to_folder: true
+      folder_mode: both
+    post_convert: *id001
+  Alpha-Dir-TFT_rich:
+    dataset_type: combined
+    max_missing_ratio: null
     no_nan_policy:
-      enabled: true                  # 链上交集窗口，无缺失
+      enabled: true
       scope: onchain
       method: intersect
     include_symbol:
@@ -147,129 +113,666 @@ experts_map:  # 仅保留两份：纯基本面、以及“链上+基本面（链
       stock_flow: true
       etf_btc: true
       etf_eth: true
-
-  # 长历史集（加上“稳定长历史”的链上/宏观）
-  expert_long_stable:
-    dataset_type: combined
-    # 不强制交集裁剪，尽量保留长历史（少量稀疏允许）
+    extra_field:
+      name: Alpha-Dir-TFT
+      value: rich
+      append_to_filename: both
+      group_to_folder: true
+      folder_mode: both
+    post_convert: *id001
+  Alpha-Ret-TFT_base:
+    dataset_type: fundamentals_only
+    max_missing_ratio: 0.01
     no_nan_policy:
       enabled: false
     include_symbol:
       funding_oi: true
       funding_vol: false
       oi: true
-      ls_global: false
-      ls_top_acc: false
-      ls_top_pos: false
-      basis: false
-      whale: false
+      ls_global: true
+      ls_top_acc: true
+      ls_top_pos: true
+      basis: true
+      whale: true
       taker: true
-      cgdi: false
-      cdri: false
-      borrow_interest: false
+      cgdi: true
+      cdri: true
+      borrow_interest: true
+    include_global: {}
+    extra_field:
+      name: Alpha-Ret-TFT
+      value: base
+      append_to_filename: both
+      group_to_folder: true
+      folder_mode: both
+    post_convert: *id001
+  Alpha-Ret-TFT_rich:
+    dataset_type: combined
+    max_missing_ratio: null
+    no_nan_policy:
+      enabled: true
+      scope: onchain
+      method: intersect
+    include_symbol:
+      funding_oi: true
+      funding_vol: true
+      oi: true
+      ls_global: true
+      ls_top_acc: true
+      ls_top_pos: true
+      basis: true
+      whale: true
+      taker: true
+      cgdi: true
+      cdri: true
+      borrow_interest: true
     include_global:
       premium: true
       altcoin: true
       reserve: true
       correlation: true
+      ahr999: true
       active_addresses: true
       new_addresses: true
+      nupl: true
+      sth_sopr: true
+      lth_sopr: true
+      sth_realized_price: true
+      lth_realized_price: true
+      lth_supply: true
+      sth_supply: true
+      macro_oscillator: true
+      rhodl: true
       dominance: true
       m2_global: true
       m2_us: true
       stablecoin_mcap: true
-      # 其他明显长历史的可逐步补入
-#  my_expert:
-#    dataset_type: combined         # combined | fundamentals_only
-#    no_nan_policy:
-#      enabled: true                # 是否去空裁剪
-#      scope: onchain               # onchain | all_new | custom
-#      method: intersect            # intersect | drop
-#      columns: []                  # scope=custom 时填：列名数组
-#    include_symbol:                # 币种维度（衍生品/现货）
-#      funding_oi: true
-#      funding_vol: false
-#      oi: true
-#      ls_global: true
-#      ls_top_acc: true
-#      ls_top_pos: true
-#      basis: true
-#      whale: true
-#      taker: true
-#      cgdi: false
-#      cdri: true
-#      borrow_interest: false
-#    include_global:                # 链上/宏观维度
-#      premium: true
-#      altcoin: true
-#      reserve: true
-#      correlation: false
-#      ahr999: true
-#      active_addresses: true
-#      new_addresses: true
-#      nupl: true
-#      sth_sopr: true
-#      lth_sopr: true
-#      sth_realized_price: true
-#      lth_realized_price: true
-#      lth_supply: true
-#      sth_supply: true
-#      macro_oscillator: true
-#      rhodl: true
-#      dominance: true
-#      m2_global: true
-#      m2_us: true
-#      stablecoin_mcap: true
-#      bubble_index: false
-#      rainbow_chart: false
-#      pi_cycle: false
-#      golden_ratio: false
-#      puell_multiple: true
-#      stock_flow: true
-#    # 可选：覆盖转存策略（若不写，则使用全局 post_convert）
-#    # post_convert:
-#    #   pkl: true
-#    #   parquet: false
+      bubble_index: true
+      rainbow_chart: true
+      pi_cycle: true
+      golden_ratio: true
+      puell_multiple: true
+      stock_flow: true
+      etf_btc: true
+      etf_eth: true
+    extra_field:
+      name: Alpha-Ret-TFT
+      value: rich
+      append_to_filename: both
+      group_to_folder: true
+      folder_mode: both
+    post_convert: *id001
+  Factor-Bridge-TFT_base:
+    dataset_type: fundamentals_only
+    max_missing_ratio: 0.01
+    no_nan_policy:
+      enabled: false
     include_symbol:
       funding_oi: true
       funding_vol: false
       oi: true
-      ls_global: false
-      ls_top_acc: false
-      ls_top_pos: false
-      basis: false
-      whale: false
+      ls_global: true
+      ls_top_acc: true
+      ls_top_pos: true
+      basis: true
+      whale: true
       taker: true
-      cgdi: false
-      cdri: false
-      borrow_interest: false
+      cgdi: true
+      cdri: true
+      borrow_interest: true
+    include_global: {}
+    extra_field:
+      name: Factor-Bridge-TFT
+      value: base
+      append_to_filename: both
+      group_to_folder: true
+      folder_mode: both
+    post_convert: *id001
+  Factor-Bridge-TFT_rich:
+    dataset_type: combined
+    max_missing_ratio: null
+    no_nan_policy:
+      enabled: true
+      scope: onchain
+      method: intersect
+    include_symbol:
+      funding_oi: true
+      funding_vol: true
+      oi: true
+      ls_global: true
+      ls_top_acc: true
+      ls_top_pos: true
+      basis: true
+      whale: true
+      taker: true
+      cgdi: true
+      cdri: true
+      borrow_interest: true
     include_global:
       premium: true
       altcoin: true
       reserve: true
-      correlation: false
-      ahr999: false
+      correlation: true
+      ahr999: true
       active_addresses: true
       new_addresses: true
-      nupl: false
-      sth_sopr: false
-      lth_sopr: false
-      sth_realized_price: false
-      lth_realized_price: false
-      lth_supply: false
-      sth_supply: false
-      macro_oscillator: false
-      rhodl: false
+      nupl: true
+      sth_sopr: true
+      lth_sopr: true
+      sth_realized_price: true
+      lth_realized_price: true
+      lth_supply: true
+      sth_supply: true
+      macro_oscillator: true
+      rhodl: true
       dominance: true
-      m2_global: false
-      m2_us: false
+      m2_global: true
+      m2_us: true
       stablecoin_mcap: true
-      bubble_index: false
-      rainbow_chart: false
-      pi_cycle: false
-      golden_ratio: false
-      puell_multiple: false
-      stock_flow: false
-      etf_btc: false
-      etf_eth: false
-#####      python src/fuse_fundamentals.py --config pipelines/configs/fuse_fundamentals.yaml
+      bubble_index: true
+      rainbow_chart: true
+      pi_cycle: true
+      golden_ratio: true
+      puell_multiple: true
+      stock_flow: true
+      etf_btc: true
+      etf_eth: true
+    extra_field:
+      name: Factor-Bridge-TFT
+      value: rich
+      append_to_filename: both
+      group_to_folder: true
+      folder_mode: both
+    post_convert: *id001
+  KeyLevel-Breakout-TFT_base:
+    dataset_type: fundamentals_only
+    max_missing_ratio: 0.01
+    no_nan_policy:
+      enabled: false
+    include_symbol:
+      funding_oi: true
+      funding_vol: false
+      oi: true
+      ls_global: true
+      ls_top_acc: true
+      ls_top_pos: true
+      basis: true
+      whale: true
+      taker: true
+      cgdi: true
+      cdri: true
+      borrow_interest: true
+    include_global: {}
+    extra_field:
+      name: KeyLevel-Breakout-TFT
+      value: base
+      append_to_filename: both
+      group_to_folder: true
+      folder_mode: both
+    post_convert: *id001
+  KeyLevel-Breakout-TFT_rich:
+    dataset_type: combined
+    max_missing_ratio: null
+    no_nan_policy:
+      enabled: true
+      scope: onchain
+      method: intersect
+    include_symbol:
+      funding_oi: true
+      funding_vol: true
+      oi: true
+      ls_global: true
+      ls_top_acc: true
+      ls_top_pos: true
+      basis: true
+      whale: true
+      taker: true
+      cgdi: true
+      cdri: true
+      borrow_interest: true
+    include_global:
+      premium: true
+      altcoin: true
+      reserve: true
+      correlation: true
+      ahr999: true
+      active_addresses: true
+      new_addresses: true
+      nupl: true
+      sth_sopr: true
+      lth_sopr: true
+      sth_realized_price: true
+      lth_realized_price: true
+      lth_supply: true
+      sth_supply: true
+      macro_oscillator: true
+      rhodl: true
+      dominance: true
+      m2_global: true
+      m2_us: true
+      stablecoin_mcap: true
+      bubble_index: true
+      rainbow_chart: true
+      pi_cycle: true
+      golden_ratio: true
+      puell_multiple: true
+      stock_flow: true
+      etf_btc: true
+      etf_eth: true
+    extra_field:
+      name: KeyLevel-Breakout-TFT
+      value: rich
+      append_to_filename: both
+      group_to_folder: true
+      folder_mode: both
+    post_convert: *id001
+  MicroStruct-Deriv-TFT_base:
+    dataset_type: fundamentals_only
+    max_missing_ratio: 0.01
+    no_nan_policy:
+      enabled: false
+    include_symbol:
+      funding_oi: true
+      funding_vol: false
+      oi: true
+      ls_global: true
+      ls_top_acc: true
+      ls_top_pos: true
+      basis: true
+      whale: true
+      taker: true
+      cgdi: true
+      cdri: true
+      borrow_interest: true
+    include_global: {}
+    extra_field:
+      name: MicroStruct-Deriv-TFT
+      value: base
+      append_to_filename: both
+      group_to_folder: true
+      folder_mode: both
+    post_convert: *id001
+  MicroStruct-Deriv-TFT_rich:
+    dataset_type: combined
+    max_missing_ratio: null
+    no_nan_policy:
+      enabled: true
+      scope: onchain
+      method: intersect
+    include_symbol:
+      funding_oi: true
+      funding_vol: true
+      oi: true
+      ls_global: true
+      ls_top_acc: true
+      ls_top_pos: true
+      basis: true
+      whale: true
+      taker: true
+      cgdi: true
+      cdri: true
+      borrow_interest: true
+    include_global:
+      premium: true
+      altcoin: true
+      reserve: true
+      correlation: true
+      ahr999: true
+      active_addresses: true
+      new_addresses: true
+      nupl: true
+      sth_sopr: true
+      lth_sopr: true
+      sth_realized_price: true
+      lth_realized_price: true
+      lth_supply: true
+      sth_supply: true
+      macro_oscillator: true
+      rhodl: true
+      dominance: true
+      m2_global: true
+      m2_us: true
+      stablecoin_mcap: true
+      bubble_index: true
+      rainbow_chart: true
+      pi_cycle: true
+      golden_ratio: true
+      puell_multiple: true
+      stock_flow: true
+      etf_btc: true
+      etf_eth: true
+    extra_field:
+      name: MicroStruct-Deriv-TFT
+      value: rich
+      append_to_filename: both
+      group_to_folder: true
+      folder_mode: both
+    post_convert: *id001
+  OnChain-ETF-TFT_base:
+    dataset_type: fundamentals_only
+    max_missing_ratio: 0.01
+    no_nan_policy:
+      enabled: false
+    include_symbol:
+      funding_oi: true
+      funding_vol: false
+      oi: true
+      ls_global: true
+      ls_top_acc: true
+      ls_top_pos: true
+      basis: true
+      whale: true
+      taker: true
+      cgdi: true
+      cdri: true
+      borrow_interest: true
+    include_global: {}
+    extra_field:
+      name: OnChain-ETF-TFT
+      value: base
+      append_to_filename: both
+      group_to_folder: true
+      folder_mode: both
+    post_convert: *id001
+  OnChain-ETF-TFT_rich:
+    dataset_type: combined
+    max_missing_ratio: null
+    no_nan_policy:
+      enabled: true
+      scope: onchain
+      method: intersect
+    include_symbol:
+      funding_oi: true
+      funding_vol: true
+      oi: true
+      ls_global: true
+      ls_top_acc: true
+      ls_top_pos: true
+      basis: true
+      whale: true
+      taker: true
+      cgdi: true
+      cdri: true
+      borrow_interest: true
+    include_global:
+      premium: true
+      altcoin: true
+      reserve: true
+      correlation: true
+      ahr999: true
+      active_addresses: true
+      new_addresses: true
+      nupl: true
+      sth_sopr: true
+      lth_sopr: true
+      sth_realized_price: true
+      lth_realized_price: true
+      lth_supply: true
+      sth_supply: true
+      macro_oscillator: true
+      rhodl: true
+      dominance: true
+      m2_global: true
+      m2_us: true
+      stablecoin_mcap: true
+      bubble_index: true
+      rainbow_chart: true
+      pi_cycle: true
+      golden_ratio: true
+      puell_multiple: true
+      stock_flow: true
+      etf_btc: true
+      etf_eth: true
+    extra_field:
+      name: OnChain-ETF-TFT
+      value: rich
+      append_to_filename: both
+      group_to_folder: true
+      folder_mode: both
+    post_convert: *id001
+  RelativeStrength-Spread-TFT_base:
+    dataset_type: fundamentals_only
+    max_missing_ratio: 0.01
+    no_nan_policy:
+      enabled: false
+    include_symbol:
+      funding_oi: true
+      funding_vol: false
+      oi: true
+      ls_global: true
+      ls_top_acc: true
+      ls_top_pos: true
+      basis: true
+      whale: true
+      taker: true
+      cgdi: true
+      cdri: true
+      borrow_interest: true
+    include_global: {}
+    extra_field:
+      name: RelativeStrength-Spread-TFT
+      value: base
+      append_to_filename: both
+      group_to_folder: true
+      folder_mode: both
+    post_convert: *id001
+  RelativeStrength-Spread-TFT_rich:
+    dataset_type: combined
+    max_missing_ratio: null
+    no_nan_policy:
+      enabled: true
+      scope: onchain
+      method: intersect
+    include_symbol:
+      funding_oi: true
+      funding_vol: true
+      oi: true
+      ls_global: true
+      ls_top_acc: true
+      ls_top_pos: true
+      basis: true
+      whale: true
+      taker: true
+      cgdi: true
+      cdri: true
+      borrow_interest: true
+    include_global:
+      premium: true
+      altcoin: true
+      reserve: true
+      correlation: true
+      ahr999: true
+      active_addresses: true
+      new_addresses: true
+      nupl: true
+      sth_sopr: true
+      lth_sopr: true
+      sth_realized_price: true
+      lth_realized_price: true
+      lth_supply: true
+      sth_supply: true
+      macro_oscillator: true
+      rhodl: true
+      dominance: true
+      m2_global: true
+      m2_us: true
+      stablecoin_mcap: true
+      bubble_index: true
+      rainbow_chart: true
+      pi_cycle: true
+      golden_ratio: true
+      puell_multiple: true
+      stock_flow: true
+      etf_btc: true
+      etf_eth: true
+    extra_field:
+      name: RelativeStrength-Spread-TFT
+      value: rich
+      append_to_filename: both
+      group_to_folder: true
+      folder_mode: both
+    post_convert: *id001
+  Risk-TFT_base:
+    dataset_type: fundamentals_only
+    max_missing_ratio: 0.01
+    no_nan_policy:
+      enabled: false
+    include_symbol:
+      funding_oi: true
+      funding_vol: false
+      oi: true
+      ls_global: true
+      ls_top_acc: true
+      ls_top_pos: true
+      basis: true
+      whale: true
+      taker: true
+      cgdi: true
+      cdri: true
+      borrow_interest: true
+    include_global: {}
+    extra_field:
+      name: Risk-TFT
+      value: base
+      append_to_filename: both
+      group_to_folder: true
+      folder_mode: both
+    post_convert: *id001
+  Risk-TFT_rich:
+    dataset_type: combined
+    max_missing_ratio: null
+    no_nan_policy:
+      enabled: true
+      scope: onchain
+      method: intersect
+    include_symbol:
+      funding_oi: true
+      funding_vol: true
+      oi: true
+      ls_global: true
+      ls_top_acc: true
+      ls_top_pos: true
+      basis: true
+      whale: true
+      taker: true
+      cgdi: true
+      cdri: true
+      borrow_interest: true
+    include_global:
+      premium: true
+      altcoin: true
+      reserve: true
+      correlation: true
+      ahr999: true
+      active_addresses: true
+      new_addresses: true
+      nupl: true
+      sth_sopr: true
+      lth_sopr: true
+      sth_realized_price: true
+      lth_realized_price: true
+      lth_supply: true
+      sth_supply: true
+      macro_oscillator: true
+      rhodl: true
+      dominance: true
+      m2_global: true
+      m2_us: true
+      stablecoin_mcap: true
+      bubble_index: true
+      rainbow_chart: true
+      pi_cycle: true
+      golden_ratio: true
+      puell_multiple: true
+      stock_flow: true
+      etf_btc: true
+      etf_eth: true
+    extra_field:
+      name: Risk-TFT
+      value: rich
+      append_to_filename: both
+      group_to_folder: true
+      folder_mode: both
+    post_convert: *id001
+  Regime-Gate_base:
+    dataset_type: fundamentals_only
+    max_missing_ratio: 0.01
+    no_nan_policy:
+      enabled: false
+    include_symbol:
+      funding_oi: true
+      funding_vol: false
+      oi: true
+      ls_global: true
+      ls_top_acc: true
+      ls_top_pos: true
+      basis: true
+      whale: true
+      taker: true
+      cgdi: true
+      cdri: true
+      borrow_interest: true
+    include_global: {}
+    extra_field:
+      name: Regime-Gate
+      value: base
+      append_to_filename: both
+      group_to_folder: true
+      folder_mode: both
+    post_convert: *id001
+  Regime-Gate_rich:
+    dataset_type: combined
+    max_missing_ratio: null
+    no_nan_policy:
+      enabled: true
+      scope: onchain
+      method: intersect
+    include_symbol:
+      funding_oi: true
+      funding_vol: true
+      oi: true
+      ls_global: true
+      ls_top_acc: true
+      ls_top_pos: true
+      basis: true
+      whale: true
+      taker: true
+      cgdi: true
+      cdri: true
+      borrow_interest: true
+    include_global:
+      premium: true
+      altcoin: true
+      reserve: true
+      correlation: true
+      ahr999: true
+      active_addresses: true
+      new_addresses: true
+      nupl: true
+      sth_sopr: true
+      lth_sopr: true
+      sth_realized_price: true
+      lth_realized_price: true
+      lth_supply: true
+      sth_supply: true
+      macro_oscillator: true
+      rhodl: true
+      dominance: true
+      m2_global: true
+      m2_us: true
+      stablecoin_mcap: true
+      bubble_index: true
+      rainbow_chart: true
+      pi_cycle: true
+      golden_ratio: true
+      puell_multiple: true
+      stock_flow: true
+      etf_btc: true
+      etf_eth: true
+    extra_field:
+      name: Regime-Gate
+      value: rich
+      append_to_filename: both
+      group_to_folder: true
+      folder_mode: both
+    post_convert: *id001

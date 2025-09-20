@@ -671,6 +671,7 @@ def fuse(
     extra_field: Dict[str, Any] | None = None,
     no_nan_policy: Dict[str, Any] | None = None,
     dataset_type: str | None = None,
+    max_missing_ratio: float | None = None,
 ) -> Tuple[str, str | None, str | None]:
     """Fuse base price/technical data with fundamentals and optional on-chain series.
 
@@ -684,6 +685,7 @@ def fuse(
     - dataset_type: 'fundamentals_only' | 'combined'
     - no_nan_policy: {enabled, scope('onchain'|'all_new'|'custom'),
                       method('intersect'|'drop'), columns: []}
+    - max_missing_ratio: drop newly added columns whose missing ratio exceeds this threshold (0-1)
       - intersect: for each (symbol,period), crops to the longest
         continuous window where target columns are all non-null
       - drop: simply removes rows with any nulls in target columns
@@ -796,8 +798,36 @@ def fuse(
                   .reset_index(level=0, drop=True)
         )
 
+    missing_threshold_cols: List[str] = []
+    missing_threshold_rows: int = 0
+    threshold: float | None = None
+    if max_missing_ratio is not None:
+        try:
+            threshold = float(max_missing_ratio)
+        except (TypeError, ValueError):
+            threshold = None
+        else:
+            if threshold < 0:
+                threshold = None
+    if threshold is not None and new_cols:
+        missing_ratio = merged[new_cols].isna().mean()
+        focus_cols = missing_ratio[missing_ratio > threshold].index.tolist()
+        if focus_cols:
+            mask = merged[focus_cols].isna().any(axis=1)
+            missing_threshold_rows = int(mask.sum())
+            if missing_threshold_rows > 0:
+                merged = merged.loc[~mask].reset_index(drop=True)
+            missing_threshold_cols = focus_cols
+            preview = focus_cols[:5]
+            suffix = '...' if len(focus_cols) > 5 else ''
+            print(f"[warn] dropped {missing_threshold_rows} row(s) due to columns exceeding missing ratio {threshold:.2%}: {preview}{suffix}")
+    else:
+        missing_threshold_cols = []
+        missing_threshold_rows = 0
+
     # 可选：对选定列执行“无缺失”裁剪（按组取交集窗口或直接丢行）
     target_cols_used: List[str] = []
+    all_null_target_cols: List[str] = []
     if no_nan_policy and (no_nan_policy.get('enabled') is True):
         scope = str(no_nan_policy.get('scope','onchain')).lower()  # onchain|all_new|custom
         method = str(no_nan_policy.get('method','intersect')).lower()  # intersect|drop
@@ -808,6 +838,16 @@ def fuse(
             target_cols = [c for c in new_cols if c in merged.columns]
         else:
             target_cols = [c for c in custom_cols if c in merged.columns]
+
+        if target_cols:
+            non_null_cols = [c for c in target_cols if merged[c].notna().any()]
+            all_null_target_cols = [c for c in target_cols if c not in non_null_cols]
+            if all_null_target_cols:
+                preview = all_null_target_cols[:5]
+                preview_suffix = '...' if len(all_null_target_cols) > 5 else ''
+                print(f"[warn] no_nan_policy skipped {len(all_null_target_cols)} all-null column(s): {preview}{preview_suffix}")
+            target_cols = non_null_cols
+
         target_cols_used = list(target_cols)
 
         if target_cols:
@@ -828,6 +868,8 @@ def fuse(
                 else:  # drop
                     groups.append(g[g[target_cols].notna().all(axis=1)])
             merged = pd.concat(groups, ignore_index=True) if groups else merged.iloc[0:0]
+        elif all_null_target_cols:
+            print('[warn] no_nan_policy: all candidate columns were empty; skip intersection to keep base rows.')
 
     # 最后阶段：根据 extra_field 重写输出文件名
     suffix = _compose_suffix(extra_field)
@@ -888,12 +930,23 @@ def fuse(
         summary["policy_scope"] = str(policy.get("scope", "")).strip()
         summary["policy_method"] = str(policy.get("method", "")).strip()
         summary["intersect_cols_count"] = len(target_cols_used)
+        summary["intersect_all_null_cols_count"] = len(all_null_target_cols)
+        summary["missing_threshold_cols_count"] = len(missing_threshold_cols)
+        summary["missing_threshold_rows"] = missing_threshold_rows
         summ_path = os.path.join(out_dir, "dataset_group_summary.csv")
-        summary[["symbol","period","rows","start_dt","end_dt","policy_enabled","policy_scope","policy_method","intersect_cols_count"]] \
+        summary[["symbol","period","rows","start_dt","end_dt","policy_enabled","policy_scope","policy_method","intersect_cols_count","intersect_all_null_cols_count","missing_threshold_cols_count","missing_threshold_rows"]] \
             .to_csv(summ_path, index=False)
         if target_cols_used:
             with open(os.path.join(out_dir, "intersect_columns.txt"), "w", encoding="utf-8") as fh:
                 for c in target_cols_used:
+                    fh.write(c+"\n")
+        if all_null_target_cols:
+            with open(os.path.join(out_dir, "intersect_columns_all_null.txt"), "w", encoding="utf-8") as fh:
+                for c in all_null_target_cols:
+                    fh.write(c+"\n")
+        if missing_threshold_cols:
+            with open(os.path.join(out_dir, "missing_threshold_columns.txt"), "w", encoding="utf-8") as fh:
+                for c in missing_threshold_cols:
                     fh.write(c+"\n")
         print(f"🧾 group summary -> {summ_path}")
     except Exception as e:
@@ -1143,6 +1196,7 @@ def run_with_config(cfg_path: str = 'pipelines/configs/fuse_fundamentals.yaml') 
                 extra_field=ef,
                 no_nan_policy=nn_policy,
                 dataset_type=ds_type,
+                max_missing_ratio=ex.get('max_missing_ratio', cfg.get('max_missing_ratio')),
             )
 
             # snapshot for this expert
@@ -1207,6 +1261,7 @@ def run_with_config(cfg_path: str = 'pipelines/configs/fuse_fundamentals.yaml') 
                 extra_field=ef,
                 no_nan_policy=nn_policy,
                 dataset_type=ds_type,
+                max_missing_ratio=ex.get('max_missing_ratio', cfg.get('max_missing_ratio')),
             )
             eff_cfg = {
                 'name': name,
@@ -1241,6 +1296,7 @@ def run_with_config(cfg_path: str = 'pipelines/configs/fuse_fundamentals.yaml') 
         validate=validate,
         report_dir=report_dir,
         extra_field=extra_field,
+        max_missing_ratio=cfg.get('max_missing_ratio'),
     )
     _dump_config_snapshot(os.path.dirname(out_csv), {
         'name': (extra_field or {}).get('name'),

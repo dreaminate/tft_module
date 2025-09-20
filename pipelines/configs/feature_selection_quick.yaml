@@ -3,13 +3,13 @@
 experts:
   alpha_dir_tft:
     name: Alpha-Dir-TFT
-    pkl_path: data/merged/expert_minimal/full_merged_with_fundamentals.pkl
+    pkl_path: data/merged/expert_group/Alpha-Dir-TFT_base/full_merged_with_fundamentals.pkl
     periods: ["1h"]
     targets: ["target_binarytrend"]
 
   derivatives_micro:
     name: Derivatives-Microstructure
-    pkl_path: data/merged/expert_group/tech_fund_only/full_merged_with_fundamentals.pkl
+    pkl_path: data/merged/expert_group/MicroStruct-Deriv-TFT_rich/full_merged_with_fundamentals.pkl
     periods: ["1h"]
     targets: ["target_binarytrend", "target_logreturn"]
 

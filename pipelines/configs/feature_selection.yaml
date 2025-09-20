@@ -4,57 +4,57 @@
 experts:
   alpha_dir_tft:
     name: Alpha-Dir-TFT
-    pkl_path: data/merged/expert_minimal/full_merged_with_fundamentals.pkl
+    pkl_path: data/merged/expert_group/Alpha-Dir-TFT_base/full_merged_with_fundamentals.pkl
     periods: ["1h", "4h", "1d"]
     targets: ["target_binarytrend"]
 
   alpha_ret_tft:
     name: Alpha-Ret-TFT
-    pkl_path: data/merged/expert_minimal/full_merged_with_fundamentals.pkl
+    pkl_path: data/merged/expert_group/Alpha-Ret-TFT_base/full_merged_with_fundamentals.pkl
     periods: ["1h", "4h", "1d"]
     targets: ["target_logreturn", "target_logsharpe_ratio"]
 
   risk_tft:
     name: Risk-TFT
-    pkl_path: data/merged/expert_minimal/full_merged_with_fundamentals.pkl
+    pkl_path: data/merged/expert_group/Risk-TFT_base/full_merged_with_fundamentals.pkl
     periods: ["1h", "4h", "1d"]
     targets: ["target_drawdown_prob", "target_max_drawdown", "target_sideway_detect"]
 
   derivatives_micro:
     name: Derivatives-Microstructure
-    pkl_path: data/merged/expert_group/fund_plus_onchain_all/full_merged_with_fundamentals.pkl
+    pkl_path: data/merged/expert_group/MicroStruct-Deriv-TFT_rich/full_merged_with_fundamentals.pkl
     periods: ["1h", "4h"]
     targets: ["target_binarytrend", "target_logreturn"]
 
   onchain_fundflow:
     name: OnChain-FundFlow
-    pkl_path: data/merged/expert_group/fund_plus_onchain_all/full_merged_with_fundamentals.pkl
+    pkl_path: data/merged/expert_group/OnChain-ETF-TFT_rich/full_merged_with_fundamentals.pkl
     periods: ["1d"]
     # NOTE: if custom label 'fundflow_strength' exists, replace below
     targets: ["target_logreturn"]
 
   regime_gating:
     name: Regime-Gating
-    pkl_path: data/merged/expert_group/fund_plus_onchain_all/full_merged_with_fundamentals.pkl
+    pkl_path: data/merged/expert_group/Regime-Gate_base/full_merged_with_fundamentals.pkl
     periods: ["1h", "4h", "1d"]
     # Placeholder: if you have regime labels, swap in here
     targets: ["target_sideway_detect"]
 
   breakout_levels:
     name: KeyLevels-Breakout
-    pkl_path: data/merged/expert_minimal/full_merged_with_fundamentals.pkl
+    pkl_path: data/merged/expert_group/KeyLevel-Breakout-TFT_base/full_merged_with_fundamentals.pkl
     periods: ["1h", "4h", "1d"]
     targets: ["target_trend_persistence", "target_breakout_count", "target_pullback_prob", "target_sideway_detect"]
 
   relative_strength:
     name: Relative-Strength-Cross
-    pkl_path: data/merged/expert_group/fund_plus_onchain_all/full_merged_with_fundamentals.pkl
+    pkl_path: data/merged/expert_group/RelativeStrength-Spread-TFT_rich/full_merged_with_fundamentals.pkl
     periods: ["1h", "4h", "1d"]
     targets: ["target_binarytrend", "target_logreturn"]
 
   factor_bridge:
     name: Factor-Bridge
-    pkl_path: data/merged/expert_macro/full_merged_with_fundamentals.pkl
+    pkl_path: data/merged/expert_group/Factor-Bridge-TFT_base/full_merged_with_fundamentals.pkl
     periods: ["1d"]
     # Placeholder target for style proxy evaluation
     targets: ["target_logsharpe_ratio"]
