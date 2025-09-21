@@ -1,4 +1,4 @@
-dataset_type: combined
+﻿dataset_type: combined
 max_missing_ratio: null
 no_nan_policy:
   enabled: true
@@ -41,7 +41,6 @@ include_global:
   bubble_index: true
   rainbow_chart: true
   pi_cycle: true
-  golden_ratio: true
   puell_multiple: true
   stock_flow: true
   etf_btc: true

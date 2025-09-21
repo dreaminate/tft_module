@@ -271,7 +271,7 @@ def main():
     # ===== 训练 =====
     trainer = Trainer(
         max_epochs=model_cfg["max_epochs"],
-        log_every_n_steps=1,
+        log_every_n_steps=int(model_cfg.get("log_every_n_steps", model_cfg.get("log_interval", 100)) or 100),
         accelerator="gpu",
         devices=1,
         precision=model_cfg.get("precision", "16-mixed"),
@@ -279,6 +279,7 @@ def main():
         accumulate_grad_batches=model_cfg.get("accumulate", 1),
         callbacks=[early_stopping, ckpt_cb, LearningRateMonitor(logging_interval="step")],
         logger=logger,
+        enable_progress_bar=True,
     )
     trainer.fit(model, train_dataloaders=train_loader, val_dataloaders=val_loader)
 

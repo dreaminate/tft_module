@@ -299,7 +299,7 @@ def main():
         strategy = "ddp_find_unused_parameters_true"
 
     trainer_kwargs = dict(
-        log_every_n_steps=1,
+        log_every_n_steps=int(model_cfg.get("log_every_n_steps", model_cfg.get("log_interval", 100)) or 100),
         max_epochs=model_cfg["max_epochs"],
         accelerator="gpu",
         devices=devices_cfg,

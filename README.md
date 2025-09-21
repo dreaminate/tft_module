@@ -2,7 +2,7 @@
 
 多目标 Temporal Fusion Transformer (TFT) 项目，面向加密 / 股票等金融时间序列的多周期、多任务预测。
 
-## 最新亮点（v0.2）
+## 最新亮点（v0.2.2）
 
 - **预测契约统一**：`MyTFTModule.predict_step` 直接输出 `{score, uncertainty, meta}`，并将批次结果写入 `predictions_{expert}_{period}_{timestamp}.parquet`，含 `symbol/period/time_idx/head_scale/head_bias/schema_ver/...` 等元信息。
 - **校准与稳定评估**：在验证阶段自动执行温度缩放、ECE、Brier、P10/P50/P90 覆盖率与 Pinball Loss；生成 per-symbol × period 汇总表，并将可靠性曲线、各类指标写入 TensorBoard。
@@ -10,6 +10,16 @@
 - **Regime 核心特征**：`features/regime_core.py` 产出波动、量能、资金费率 / OI 斜率、动量、ATR 斜率、结构 gap 等慢频字段，自动融合进 OOF 数据集。
 - **OOF ↦ Z 层训练闭环**：`pipelines/build_oof_for_z.py` 汇总各专家预测、校验版本一致性，生成 `datasets/z_train.parquet`；`experts/Z-Combiner/train_z.py` 基于 OOF 数据训练二层 Stacking（Logistic / MLP），并与“等权”“单最佳专家”基线比较。
 - **无泄漏审计**：`utils/audit_no_leakage.py` 快速检测 `z_train.parquet` 是否存在重复、时间倒退、缺失或时间间隔异常。
+
+### 训练与特征筛选体验（v0.2.2 增强）
+
+- XGBoost 2.x 支持：统一使用 `tree_method="hist" + device="cuda"`，旧版自动回退 `gpu_hist/gpu_predictor`。
+- Lightning 进度条默认开启，同时日志频率由配置控制：
+  - 在专家叶子 `model_config.yaml` 中设置 `log_every_n_steps`（优先）或 `log_interval`，未设置时默认 100。
+  - 相关脚本：`train_multi_tft.py`、`train_resume.py`、`warm_start_train.py`。
+- 特征筛选线性路径更稳健：
+  - `embedded_stage.py` 将 `linear_max_iter` 默认提高到 2000；
+  - 在 `LogisticRegressionCV` / `ElasticNetCV` 拟合时静默 `ConvergenceWarning`（不影响结果，仅抑制噪声）。
 
 ## 数据融合（Fundamentals + On-chain）
 

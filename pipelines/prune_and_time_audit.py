@@ -8,7 +8,6 @@ import re
 # 直接复用 tft 版本逻辑（移植）
 
 DROP_COLS = [
-    "x_3_golden_ratio_multiplier",
     "cgdi_index_value_futures_cgdi",
     "interest_rate_borrow_interest_rate_binance",
     "open_fr_vol", "low_fr_vol", "close_fr_vol", "high_fr_vol",
@@ -39,10 +38,7 @@ ROW_FILTER_COLS = [
     "altcoin_index_index",
     "net_unpnl_bitcoin_bitcoin_net_unrealized_profit_loss",
     "short_term_holder_supply_bitcoin_bitcoin_short_term_holder_supply",
-    "ma_350_golden_ratio_multiplier",
-    "low_bull_high_2_golden_ratio_multiplier",
     "vocd_bitcoin_bitcoin_reserve_risk",
-    "accumulation_high_1_6_golden_ratio_multiplier",
     "ma_110_pi_cycle_indicator",
     "ma_350_mu_2_pi_cycle_indicator",
     "premium_premium_index",

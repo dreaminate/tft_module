@@ -1,6 +1,25 @@
 ﻿# 更新日志
 
 ## 2025-09-20 — 专家数据管线与文档梳理（v0.2.1）
+## 2025-09-21 — 训练与特征筛选体验改进（v0.2.2）
+
+- ⚙️ XGBoost 2.x 兼容：所有特征筛选/树模型处（`embedded_stage.py`、`tree_perm.py`、`rolling_validate.py`、`optimize_subset.py`）统一改为 `tree_method="hist" + device="cuda"`，并在旧版自动回退到 `gpu_hist/gpu_predictor`，消除 `gpu_hist` 弃用告警。
+- 🧭 Lightning 进度条与日志：`train_multi_tft.py`、`train_resume.py`、`warm_start_train.py` 默认开启进度条（`enable_progress_bar=True`），同时将 `log_every_n_steps` 配置化（优先读取 `model_config.yaml` 的 `log_every_n_steps` 或 `log_interval`，默认 100），避免控制台频繁刷新。
+- 🧪 线性路径稳健性：`embedded_stage.py` 的线性模型：
+  - 默认 `linear_max_iter` 提升为 2000；
+  - 在 `LogisticRegressionCV` 与 `ElasticNetCV` 拟合时静默 `ConvergenceWarning`，降低噪声；
+  - `pipelines/configs/feature_selection.yaml` 同步将 `embedded.params.linear_max_iter` 提升到 2000。
+- 其它：保留 SHAP 可选依赖的兼容路径；未安装时不影响主流程。
+
+影响范围（关键文件）：
+
+- `features/selection/embedded_stage.py`
+- `features/selection/tree_perm.py`
+- `features/selection/rolling_validate.py`
+- `features/selection/optimize_subset.py`
+- `train_multi_tft.py` / `train_resume.py` / `warm_start_train.py`
+- `pipelines/configs/feature_selection.yaml`
+
 
 - **专家数据集重构**：`pipelines/configs/fuse_fundamentals.yaml` 的 `experts_map` 统一采用 `<Expert>_{base|rich}` 命名，融合输出落入 `data/merged/expert_group/<Expert>_{base|rich}/`，旧的 `baseline` / `expert_*` 等目录已清理。
 - **缺失率 / 交集逻辑增强**：`src/fuse_fundamentals.py` 引入 `max_missing_ratio` 行裁剪与全空列过滤；`dataset_group_summary.csv` 记录 `missing_threshold_rows`、`missing_threshold_cols_count`、`intersect_all_null_cols_count` 并生成 `missing_threshold_columns.txt`。

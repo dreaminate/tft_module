@@ -251,6 +251,8 @@ if __name__ == "__main__":
         accumulate_grad_batches=model_cfg.get("accumulate", 1),
         callbacks=[early_stopping, ckpt_cb, LearningRateMonitor(logging_interval="step")],
         logger=logger,
+        log_every_n_steps=int(model_cfg.get("log_every_n_steps", model_cfg.get("log_interval", 100)) or 100),
+        enable_progress_bar=True,
     )
 
     trainer.fit(model, train_dataloaders=train_loader, val_dataloaders=val_loader)

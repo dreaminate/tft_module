@@ -281,7 +281,7 @@ def load_global_fundamentals(include: Dict[str, bool] | None = None) -> pd.DataF
         # 宏观配套
         "dominance","m2_global","m2_us","stablecoin_mcap",
         # 周期类视觉指标
-        "bubble_index","rainbow_chart","pi_cycle","golden_ratio",
+        "bubble_index","rainbow_chart","pi_cycle",
         "puell_multiple","stock_flow",
         # ETF
         "etf_btc","etf_eth",
@@ -561,33 +561,6 @@ def load_global_fundamentals(include: Dict[str, bool] | None = None) -> pd.DataF
                 "ma_350_mu_2": "ma_350_mu_2_pi_cycle_indicator",
             })
             keep = [c for c in ["ma_110_pi_cycle_indicator","ma_350_mu_2_pi_cycle_indicator"] if c in df.columns]
-            df = df[["timestamp", *keep]]
-            rows.append(df)
-    if inc.get("golden_ratio", True):
-        f = "data/cglass/index/golden_ratio_multiplier.csv"
-        df = _read_csv_head(f)
-        if not df.empty:
-            if "timestamp" not in df.columns:
-                # file order observed: low_bull_high_2,timestamp,ma_350,accumulation_high_1_6,x_3,x_5,x_8,x_13,x_21
-                pass
-            df["timestamp"] = _ensure_int_ms(df["timestamp"]).astype("int64")
-            df = df.rename(columns={
-                "ma_350": "ma_350_golden_ratio_multiplier",
-                "low_bull_high_2": "low_bull_high_2_golden_ratio_multiplier",
-                "accumulation_high_1_6": "accumulation_high_1_6_golden_ratio_multiplier",
-                "x_3": "x_3_golden_ratio_multiplier",
-                "x_5": "x_5_golden_ratio_multiplier",
-                "x_8": "x_8_golden_ratio_multiplier",
-                "x_13": "x_13_golden_ratio_multiplier",
-                "x_21": "x_21_golden_ratio_multiplier",
-            })
-            keep = [c for c in [
-                "ma_350_golden_ratio_multiplier",
-                "low_bull_high_2_golden_ratio_multiplier",
-                "accumulation_high_1_6_golden_ratio_multiplier",
-                "x_3_golden_ratio_multiplier","x_5_golden_ratio_multiplier","x_8_golden_ratio_multiplier",
-                "x_13_golden_ratio_multiplier","x_21_golden_ratio_multiplier",
-            ] if c in df.columns]
             df = df[["timestamp", *keep]]
             rows.append(df)
     if inc.get("puell_multiple", True):

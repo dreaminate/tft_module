@@ -10,7 +10,7 @@ import numpy as np
     "_infer_default_window","_ensure_numeric","_roll_zscore","_roll_robust","_roll_minmax","_to_ms","fetch_funding_rate",
     "accum_as_of","long_short_account_ratio","fetch_oi","taker_buy_sell_volume","premium_index","fetch_index_AHR999",
     "fetch_index_fear_greed","fetch_margin_long_short","fetch_borrow_interest_rate","fetch_puell_multiple","fetch_stock_flow",
-    "fetch_pi_cycle_indicator","fetch_golden_ratio_multiplier","fetch_profitable_days","fetch_rainbow_chart","fetch_stableCoin_marketCap_history",
+    "fetch_pi_cycle_indicator","fetch_profitable_days","fetch_rainbow_chart","fetch_stableCoin_marketCap_history",
     "fetch_bubble_index","fetch_altcoin_season","fetch_bitcoin_sth_sopr","fetch_bitcoin_lth_sopr","fetch_bitcoin_sth_realized_price",
     "fetch_bitcoin_lth_realized_price","fetch_bitcoin_short_term_holder_supply","fetch_bitcoin_long_term_holder_supply","fetch_bitcoin_rhodl_ratio",
     "fetch_bitcoin_new_addresses","fetch_bitcoin_active_addresses","fetch_bitcoin_reserve_risk","fetch_bitcoin_net_unrealized_profit_loss",
@@ -751,23 +751,6 @@ def fetch_pi_cycle_indicator() -> pd.DataFrame:
     return df
 # a = fetch_pi_cycle_indicator()
 # print(a.head())
-def fetch_golden_ratio_multiplier() -> pd.DataFrame:
-    headers = {"accept": "application/json", "CG-API-KEY": API_KEY}
-    url = BASE + "/api/index/golden-ratio-multiplier"
-
-    resp = requests.get(url, headers=headers, timeout=30)
-    resp.raise_for_status()
-    payload = resp.json()
-    if str(payload["code"]) != "0":
-        raise RuntimeError(f"API error: code={payload['code']}, msg={payload.get('msg')}")
-
-    df = pd.DataFrame(payload["data"])
-    df = df.drop(columns=["price"], errors="ignore")
-    os.makedirs("data/cglass/index", exist_ok=True)
-    df.to_csv("data/cglass/index/golden_ratio_multiplier.csv", index=False)
-    return df
-# a = fetch_golden_ratio_multiplier()
-# print(a.head())
 def fetch_profitable_days() -> pd.DataFrame:
     headers = {"accept": "application/json", "CG-API-KEY": API_KEY}
     url = BASE + "/api/index/bitcoin/profitable-days"
@@ -1392,8 +1375,7 @@ FUNCTION_NAMES = [
     "fetch_puell_multiple",
     "fetch_stock_flow",
     "fetch_pi_cycle_indicator",
-    "fetch_golden_ratio_multiplier",
-    "fetch_profitable_days",
+        "fetch_profitable_days",
     "fetch_rainbow_chart",
     "fetch_stableCoin_marketCap_history",
     "fetch_bubble_index",

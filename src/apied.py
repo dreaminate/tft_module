@@ -191,7 +191,6 @@ def apied_main():
     safe_call(fetch_bitcoin_sth_sopr, pause=pause)
     safe_call(fetch_bitcoin_lth_sopr, pause=pause)
     safe_call(fetch_stock_flow, pause=pause)
-    safe_call(fetch_golden_ratio_multiplier, pause=pause)
     safe_call(fetch_pi_cycle_indicator, pause=pause)
     # safe_call(fetch_profitable_days, pause=pause)
     safe_call(fetch_bitcoin_rhodl_ratio, pause=pause)
