@@ -212,6 +212,25 @@
 
 - 多专家场景注意：可先选统一基础集，再为特定专家补充少量“专用增强”，在维护复杂度与任务最优之间折中。
 
+### Pinned 默认字段（重要）
+
+- 定义：每位专家都有“默认字段集合”（含通用 OHLCV 与该专家推荐字段），在筛选阶段被标记为 pinned。
+- 行为：pinned 字段在 Step 1/2（覆盖率与低方差）不会被剔除，尽最大可能进入后续流程（相关簇/VIF 仍可能做最小必要压缩，但优先保留 pinned）。
+- 同义映射：若数据集中字段名与文档不同但含义相同，则自动映射为数据中的实际列名；若确实不存在则进入缺失报表。
+- 报表：
+  - 解析结果：`reports/experts/fields_resolved.csv`
+  - 缺失列表：`reports/experts/missing_fields.csv`
+
+示例（Alpha-Dir Base pinned 子集，按你的数据列对齐后）：
+```
+open, high, low, close, volume, vwap,
+rsi, macd_hist, adx 或 adx_scaled, boll_bandwidth,
+ma5, ma20, obv, atr, cci, momentum, ppo,
+stoch_rsi, williams_r, tsi,
+donchian_high_20, donchian_low_20, keltner_upper_20, keltner_lower_20, squeeze_on,
+trendline_slope_20, ma_diff_5_20, boll_pctb, amplitude_range
+```
+
 ---
 
 ## 训练与评估（嵌套时序 CV、单指标早停、分币日志）

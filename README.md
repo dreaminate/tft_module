@@ -319,6 +319,22 @@ python -m pipelines.run_feature_screening --config pipelines/configs/feature_sel
 python -m pipelines.run_feature_screening --config pipelines/configs/feature_selection_quick.yaml
 ```
 
+4) 仅跑单个专家/通道（带 pinned 注入示例）
+
+```bash
+# base 通道（默认字段按 experts.md 映射注入为 pinned，训练清单=核心 ∪ pinned）
+python -m features.selection.run_pipeline --with-filter --expert-name "Alpha-Dir-TFT" --channel base --pkl data/pkl_merged/full_merged.pkl
+
+# rich 通道
+python -m features.selection.run_pipeline --with-filter --expert-name "Alpha-Dir-TFT" --channel rich --pkl data/pkl_merged/full_merged.pkl
+```
+
+5) 导出 TFT 变量选择（VSN）并参与 Embedded 阶段
+
+```bash
+python -m features.selection.tft_gating --ckpt <你的ckpt路径> --out reports/feature_evidence/tft_gating.csv
+```
+
 ### 结果产出
 
 - 每位专家/通道的中间产物：
@@ -335,7 +351,7 @@ python -m pipelines.run_feature_screening --config pipelines/configs/feature_sel
 
 - 聚合与最终清单：
   - `reports/feature_evidence/<Expert>/aggregated_core.csv`：核心集合与统计
-  - `configs/selected_features.txt`：导出的核心清单（也会复制一份到专家专属目录）
+  - `configs/selected_features.txt`：训练用清单，已改为“核心集 ∪ 当前专家通道的 pinned 默认集”
   - `plus_features.txt` / `optimized_features.txt`：包装式搜索的增强或优化集合
   - `<Expert>/summary.json`：本次筛选摘要（通道统计、Wrapper 结果、可选的后验验证）
 

@@ -31,6 +31,8 @@ class FilterParams:
     keep_n_per_group: int = 1
     # 自动推断 IC/MI 目标（当 ic_targets/mi_targets 未提供时）
     auto_ic_mi: bool = True
+    # 置顶特征：在筛选流程中强制保留，至少不受 Step1/2（coverage/variance）影响
+    pinned_features: Iterable[str] | None = None
 
 
 @dataclass
@@ -259,6 +261,11 @@ def run_filter_stage(
     print(f"[filter] expert={expert_name} channel={channel} | periods={len(ds.periods)} targets={len(ds.targets)}", flush=True)
     full = pd.concat([ds.train, ds.val], ignore_index=True)
     features = ds.features
+    # 合并 pinned 特征到候选集中（若存在于数据）
+    pinned_list = [str(f) for f in (params.pinned_features or [])]
+    pinned_in_df = [f for f in pinned_list if f in full.columns]
+    if pinned_in_df:
+        features = list(dict.fromkeys(list(features) + pinned_in_df))
     numeric_df = _ensure_float(full, features)
     print(f"[filter] start | total_features={len(features)} rows={len(numeric_df)}", flush=True)
 
@@ -269,6 +276,11 @@ def run_filter_stage(
 
     dropped_rows = []
     keep_mask = _build_coverage_keep_mask(coverage, params)
+    # Step1: pinned 跳过 coverage 剔除
+    if pinned_in_df:
+        for f in pinned_in_df:
+            if f in keep_mask.index:
+                keep_mask.loc[f] = True
     dropped_rows.extend(
         [
             (f, "coverage", coverage[f])
@@ -283,6 +295,11 @@ def run_filter_stage(
     )
 
     low_var_mask = stats["variance"] >= params.variance_threshold
+    # Step2: pinned 跳过低方差剔除
+    if pinned_in_df:
+        for f in pinned_in_df:
+            if f in low_var_mask.index:
+                low_var_mask.loc[f] = True
     dropped_rows.extend(
         [
             (f, "variance", stats.loc[f, "variance"])
@@ -342,8 +359,22 @@ def run_filter_stage(
         if max_vif <= params.vif_threshold:
             break
         worst = vif_values.sort_values(ascending=False).index[0]
+        # 若最差的是 pinned，则跳过该次删除，尝试删除下一个（确保 pinned 尽量不被 VIF 阶段移除）
+        if worst in pinned_in_df:
+            # 尝试找一个非 pinned 的次差特征
+            sorted_v = vif_values.sort_values(ascending=False)
+            alt = None
+            for cand in sorted_v.index:
+                if cand != worst and cand in vif_frame.columns and cand not in pinned_in_df:
+                    alt = cand
+                    break
+            if alt is None:
+                # 全是 pinned 或找不到可删项，结束 VIF 循环
+                break
+            worst = alt
         vif_frame = vif_frame.drop(columns=[worst])
-        keep_features.remove(worst)
+        if worst in keep_features:
+            keep_features.remove(worst)
         dropped_rows.append((worst, "vif", float(max_vif)))
         print(f"[filter] step4 VIF iter={vif_iter}/{params.max_vif_iter} | drop={worst} max_vif={float(max_vif):.3f} kept={len(keep_features)}", flush=True)
 
@@ -371,6 +402,10 @@ def run_filter_stage(
         icmi.to_csv(out_dir / "ic_mi.csv", index=False)
     if group_map_rows:
         pd.DataFrame(group_map_rows, columns=["feature", "group_rep", "group_key"]).to_csv(out_dir / "group_map.csv", index=False)
+
+    # 最终确保 pinned 出现在保留列表中（若实际存在列）
+    if pinned_in_df:
+        keep_features = list(dict.fromkeys(list(keep_features) + pinned_in_df))
 
     allow_path = out_dir / "allowlist.txt"
     with allow_path.open("w", encoding="utf-8") as fh:
@@ -408,6 +443,7 @@ def run_filter_for_channel(
             group_patterns=tuple(params_dict.get("group_patterns", params.group_patterns)),
             keep_n_per_group=int(params_dict.get("keep_n_per_group", params.keep_n_per_group)),
             auto_ic_mi=bool(params_dict.get("auto_ic_mi", params.auto_ic_mi)),
+            pinned_features=tuple(params_dict.get("pinned_features", params.pinned_features or ())) or None,
         )
     return run_filter_stage(
         pkl_path=pkl_path,

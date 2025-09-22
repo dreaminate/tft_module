@@ -1,5 +1,49 @@
 ﻿# 更新日志
 
+## 2025-09-22 — Pinned 默认字段 + 字段解析报表（v0.2.6）
+
+新增/变更：
+
+- 筛选模块支持 pinned 特征：
+  - `features/selection/filter_stage.py`
+    - 新增 `FilterParams.pinned_features`，可注入“置顶默认字段”。
+    - Step 1/2（覆盖率/低方差）不剔除 pinned；VIF 阶段优先保留 pinned（在无可替代时才最小化删除）。
+    - 最终确保 pinned 出现在 `allowlist.txt`（如该列存在于数据）。
+- 管线自动解析专家默认字段与同义映射：
+  - `features/selection/run_pipeline.py`
+    - 内置各专家的默认字段集合（含通用 OHLCV 与专家推荐字段）。
+    - 同义词映射：将文档中的通用名映射为数据集中的实际列名；若不存在则记为缺失。
+    - 输出报表：
+      - 解析结果：`reports/experts/fields_resolved.csv`
+      - 缺失列表：`reports/experts/missing_fields.csv`
+    - 在 `--with-filter` 时按 `--expert-name` 与 `--channel` 自动注入 pinned 列表。
+- 文档更新：
+  - `experts.md` 新增“Pinned 默认字段”说明与示例（不改变其它文档结构）。
+  - 训练清单合并：`configs/selected_features.txt` 改为“核心集 ∪ 当前专家通道的 pinned 默认集”，确保训练必含默认字段（即使在聚合核心中落选）。
+
+使用：
+
+- 生成解析与报表并执行筛选（示例，Alpha-Dir Base）：
+  ```bash
+  python -m features.selection.run_pipeline --with-filter --expert-name "Alpha-Dir-TFT" --channel base --pkl data/pkl_merged/full_merged.pkl
+  ```
+- 报表输出：
+  - `reports/experts/fields_resolved.csv`
+  - `reports/experts/missing_fields.csv`
+- 筛选输出（含 allowlist）：`reports/feature_evidence/<expert>/<channel>/stage1_filter/`
+- 训练侧衔接：保留使用 `selected_features.txt` 的就近查找与加载逻辑，兼容现有训练脚本。
+
+影响文件（关键）：
+
+- `features/selection/filter_stage.py`
+- `features/selection/run_pipeline.py`
+- `experts.md`
+
+兼容性：
+
+- 不改变训练调用与数据格式；默认仅新增候选与报表产物。
+- 相关簇/多重共线（VIF）阶段可能在极端情况下移除非 pinned 列；pinned 尽量保留。
+
 ## 2025-09-22 — 技术面新增 β/HVN/LVN + 构建与日志优化（v0.2.5）
 
 新增/变更：
