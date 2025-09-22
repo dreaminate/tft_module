@@ -38,15 +38,24 @@ def _prep_xy(
 
 
 def _build_group_index(val_df: pd.DataFrame, group_cols: Optional[List[str]]) -> Dict[str, np.ndarray]:
+    # build positional indices aligned to X_va (which preserves row order of val_df[cols])
+    length = len(val_df)
+    if length <= 0:
+        return {"__all__": np.arange(0, dtype=int)}
     if not group_cols:
-        return {"__all__": val_df.index.to_numpy()}
+        return {"__all__": np.arange(length, dtype=int)}
     valid_cols = [c for c in group_cols if c in val_df.columns]
     if not valid_cols:
-        return {"__all__": val_df.index.to_numpy()}
-    groups = {}
-    for key, idx in val_df.groupby(valid_cols, sort=False).groups.items():
-        groups[str(key)] = np.asarray(idx)
-    return groups or {"__all__": val_df.index.to_numpy()}
+        return {"__all__": np.arange(length, dtype=int)}
+    df_pos = val_df.reset_index(drop=True)
+    groups: Dict[str, np.ndarray] = {}
+    for key, idx in df_pos.groupby(valid_cols, sort=False).groups.items():
+        arr = np.asarray(idx, dtype=int)
+        # safety: ensure positions are within [0, length)
+        arr = arr[(arr >= 0) & (arr < length)]
+        if arr.size:
+            groups[str(key)] = arr
+    return groups or {"__all__": np.arange(length, dtype=int)}
 
 
 def _build_valid_mask(length: int, group_index: Dict[str, np.ndarray], embargo: int, purge: int) -> np.ndarray:
@@ -56,12 +65,19 @@ def _build_valid_mask(length: int, group_index: Dict[str, np.ndarray], embargo: 
     if drop_front == 0 and drop_back == 0:
         return mask
     for idx in group_index.values():
+        if idx.size == 0:
+            continue
+        idx = idx[(idx >= 0) & (idx < length)]
+        if idx.size == 0:
+            continue
         if drop_front > 0:
             take = min(drop_front, len(idx))
-            mask[idx[:take]] = False
+            sel = idx[:take]
+            mask[sel] = False
         if drop_back > 0:
             take = min(drop_back, len(idx))
-            mask[idx[-take:]] = False
+            sel = idx[-take:]
+            mask[sel] = False
     return mask
 
 
@@ -204,6 +220,10 @@ def fit_tree_and_permutation(
                 for idx in group_index.values():
                     if len(idx) <= 1:
                         continue
+                    # clip to valid range of current array
+                    idx = idx[(idx >= 0) & (idx < len(arr))]
+                    if len(idx) <= 1:
+                        continue
                     max_shift = len(idx) - 1
                     if perm_method != "cyclic_shift":
                         raise NotImplementedError(f"perm_method={perm_method} not supported")
@@ -231,9 +251,23 @@ def fit_tree_and_permutation(
     else:
         valid_mask = np.ones(len(X_va), dtype=bool)
     if valid_mask.any():
-        rmse = mean_squared_error(y_va[valid_mask], pred[valid_mask], squared=False)
+        try:
+            from sklearn.metrics import root_mean_squared_error as _rmse  # type: ignore
+            rmse = float(_rmse(y_va[valid_mask], pred[valid_mask]))
+        except Exception:
+            try:
+                rmse = float(np.sqrt(mean_squared_error(y_va[valid_mask], pred[valid_mask])))
+            except Exception:
+                rmse = float(np.sqrt(mean_squared_error(y_va[valid_mask], pred[valid_mask])))
     else:
-        rmse = mean_squared_error(y_va, pred, squared=False)
+        try:
+            from sklearn.metrics import root_mean_squared_error as _rmse  # type: ignore
+            rmse = float(_rmse(y_va, pred))
+        except Exception:
+            try:
+                rmse = float(np.sqrt(mean_squared_error(y_va, pred)))
+            except Exception:
+                rmse = float(np.sqrt(mean_squared_error(y_va, pred)))
     base_score = -float(rmse)
     if not time_perm:
         perm = permutation_importance(
@@ -262,7 +296,11 @@ def fit_tree_and_permutation(
         pred_tmp = reg.predict(Xtmp)
         if not valid_mask.any():
             return base
-        rmse_tmp = mean_squared_error(y_va[valid_mask], pred_tmp[valid_mask], squared=False)
+        try:
+            from sklearn.metrics import root_mean_squared_error as _rmse  # type: ignore
+            rmse_tmp = float(_rmse(y_va[valid_mask], pred_tmp[valid_mask]))
+        except Exception:
+            rmse_tmp = float(np.sqrt(mean_squared_error(y_va[valid_mask], pred_tmp[valid_mask])))
         return -float(rmse_tmp)
 
     for c in cols:
@@ -271,6 +309,9 @@ def fit_tree_and_permutation(
             Xp = X_va.copy()
             arr = Xp[c].to_numpy()
             for idx in group_index.values():
+                if len(idx) <= 1:
+                    continue
+                idx = idx[(idx >= 0) & (idx < len(arr))]
                 if len(idx) <= 1:
                     continue
                 max_shift = len(idx) - 1
@@ -378,9 +419,25 @@ def run(
             out["rank_pct"] = out["rank_avg"] / float(n_feat)
             out["period"] = str(per)
             out["target"] = target
+            # era: 取验证集窗口的年份（若可用）
+            try:
+                if "datetime" in per_va.columns:
+                    era_year = pd.to_datetime(per_va["datetime"]).dt.year.max()
+                    out["era"] = str(int(era_year))
+            except Exception:
+                pass
             out["block_len"] = per_block_len
             out["embargo"] = per_embargo
             out["purge"] = per_purge
+            # 置换不确定度：95% CI
+            try:
+                nrep = int(repeats) if time_perm else 10
+                se = out["perm_std"].astype(float) / float(np.sqrt(max(1, nrep)))
+                out["perm_ci95_low"] = (out["perm_mean"].astype(float) - 1.96 * se).astype(float)
+                out["perm_ci95_high"] = (out["perm_mean"].astype(float) + 1.96 * se).astype(float)
+            except Exception:
+                out["perm_ci95_low"] = np.nan
+                out["perm_ci95_high"] = np.nan
             csv_path = per_dir / f"{target}_importances.csv"
             out.to_csv(csv_path, index=False)
             print(f"[save] {csv_path} | base_score={base:.6f}")
@@ -407,12 +464,34 @@ def main():
     ap.add_argument("--pkl", type=str, default=None, help="Override merged dataset PKL path")
     ap.add_argument("--time-perm", action="store_true", help="Use time-aware permutation (cyclic shift)")
     ap.add_argument("--block-len", type=int, default=36)
+    ap.add_argument("--block-len-by-period", type=str, default=None, help="Per-period block length mapping, e.g. '1h:96,4h:48,1d:20'")
     ap.add_argument("--group-cols", type=str, default="symbol", help="Comma-separated group cols for permutation (e.g., symbol,period)")
     ap.add_argument("--perm-repeats", type=int, default=5)
     ap.add_argument("--embargo", type=int, default=0)
+    ap.add_argument("--embargo-by-period", type=str, default=None, help="Per-period embargo mapping, e.g. '1h:24,4h:12' (drop front) ")
     ap.add_argument("--purge", type=int, default=0)
+    ap.add_argument("--purge-by-period", type=str, default=None, help="Per-period purge mapping, e.g. '1h:24,4h:12' (drop back)")
     ap.add_argument("--targets", type=str, default=None, help="Comma-separated targets to include (override)")
     args = ap.parse_args()
+
+    def _parse_period_map(s: Optional[str]) -> Optional[Dict[str, int]]:
+        if not s:
+            return None
+        out: Dict[str, int] = {}
+        for kv in s.split(","):
+            kv = kv.strip()
+            if not kv:
+                continue
+            if ":" not in kv:
+                continue
+            k, v = kv.split(":", 1)
+            k = k.strip()
+            try:
+                out[k] = int(float(v.strip()))
+            except Exception:
+                continue
+        return out or None
+
     targets_override = [t.strip() for t in (args.targets or "").split(",") if t.strip()] or None
     gcols = [c.strip() for c in (args.group_cols or "").split(",") if c.strip()]
     periods = None
@@ -430,12 +509,14 @@ def main():
         time_perm=bool(args.time_perm),
         perm_method="cyclic_shift",
         block_len=args.block_len,
-        block_len_by_period=None,
+        block_len_by_period=_parse_period_map(args.block_len_by_period),
         group_cols=gcols,
         repeats=args.perm_repeats,
         targets_override=targets_override,
         embargo=args.embargo,
+        embargo_by_period=_parse_period_map(args.embargo_by_period),
         purge=args.purge,
+        purge_by_period=_parse_period_map(args.purge_by_period),
     )
     if summary.empty:
         print("[warn] summary empty (no features evaluated)")

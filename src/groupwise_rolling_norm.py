@@ -2,6 +2,11 @@
 import pandas as pd
 import numpy as np
 from typing import List
+import warnings
+from pandas.errors import PerformanceWarning
+
+# 屏蔽 pandas 的性能告警（列逐个插入导致的碎片化），避免刷屏
+warnings.filterwarnings("ignore", category=PerformanceWarning)
 
 def groupwise_rolling_norm(
     df: pd.DataFrame,

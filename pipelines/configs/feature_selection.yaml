@@ -26,6 +26,9 @@ embedded:
     sample_cap:  60000
     tree_max_features:  null
     n_jobs:  -1
+    # VSN（可选）：若已导出 tft_gating.csv，则在 Embedded 阶段一并纳入证据
+    use_vsn:  true
+    vsn_csv:  null   # 默认自动在 reports/feature_evidence/<Expert>/<channel>/ 下查找
   per_channel: 
     base:  {}
     rich:  {}
@@ -68,6 +71,7 @@ experts:
     periods:  ["1h", "4h", "1d"]
     # Placeholder:  if you have regime labels, swap in here
     targets:  ["target_sideway_detect"]
+    skip_selection:  true      # 整合型专家：从特征筛选中跳过，仅保留训练/路由接口
 
   breakout_levels: 
     name:  KeyLevels-Breakout
@@ -87,6 +91,7 @@ experts:
     periods:  ["1d"]
     # Placeholder target for style proxy evaluation
     targets:  ["target_logsharpe_ratio"]
+    skip_selection:  true
 
 # Split schemes
 splits: 
@@ -135,6 +140,13 @@ aggregation:
   # Stability:  fraction of (period,target) pairs where feature is in pairwise topK
   topk_per_pair:  64
   min_appear_rate:  0.5     # >=50% of pairs
+  # 新增：跨 era 出现率阈值（需要 era 列）
+  min_appear_rate_era:  0.6
+  # 新增：Rich 通道质量权重（按 period）
+  rich_quality_weights: 
+    "1h":  0.9
+    "4h":  1.0
+    "1d":  1.0
 
 # Wrapper search budgets (GA/RFE)
 wrapper: 
@@ -152,8 +164,28 @@ wrapper:
     weights:
       classification: 1.0
       regression: 1.0
+    # 新增：多 seed 运行以提升稳健性；留空或仅1个时回退单次 GA
+    seeds: [42, 2025, 7]
+
 # Finalization thresholds
 finalize: 
-  expert_only_max:  48      # max additional features beyond core per expert\n  max_online_latency_ms:  2000  # hard budget placeholder (not enforced in code yet)\n  outputs: \n    core_summary_csv:  reports/feature_evidence/aggregated_core.csv\n    core_allowlist_txt:  configs/selected_features.txt\n    optimized_allowlist_txt:  reports/feature_evidence/optimized_features.txt\n    plus_allowlist_txt:  reports/feature_evidence/plus_features.txt\n  post_validation: \n    enabled:  true\n    method:  rolling\n    n_splits:  5\n    val_ratio:  0.2\n    min_score:  null\n  documentation: \n    summary:  true\n
+  expert_only_max:  48      # max additional features beyond core per expert
+  max_online_latency_ms:  2000  # hard budget placeholder (not enforced in code yet)
+  outputs: 
+    core_summary_csv:  reports/feature_evidence/aggregated_core.csv
+    core_allowlist_txt:  configs/selected_features.txt
+    optimized_allowlist_txt:  reports/feature_evidence/optimized_features.txt
+    plus_allowlist_txt:  reports/feature_evidence/plus_features.txt
+  post_validation: 
+    enabled:  true
+    method:  rolling
+    n_splits:  5
+    val_ratio:  0.2
+    min_score:  null
+  documentation: 
+    summary:  true
+  # 新增：对子集清单与全量特征做一次一致性对照评估
+  forward_compare:
+    enabled:  false
 
 

@@ -1,5 +1,140 @@
 ﻿# 更新日志
 
+## 2025-09-22 — 技术面新增 β/HVN/LVN + 构建与日志优化（v0.2.5）
+
+新增/变更：
+
+- 技术面新增字段（在“指标阶段”直接生成，随后经目标→融合进入长表）：
+  - `beta_btc_60d`：与 BTC 的滚动 β，防泄露 `shift(1)`；按周期使用等效 60 天窗口（1h≈1440bars，4h≈360bars，1d=60）。
+  - `volume_profile_hvn` / `volume_profile_lvn`：等效 60 天窗口内按收盘价分箱、以成交量加权的 Volume Profile 节点（高/低成交量价位），输出为箱中心，统一 `shift(1)`。
+  - 两类字段均已纳入泄露防护与分组滑动归一化流水线（会派生 `_zn{win}`/`_mm{win}`）。
+
+- 一键构建脚本改进：
+  - `src/build_full_merged.py` 的 `--periods` 现同时支持空格或逗号分隔（PowerShell/Unix 兼容），示例：
+    - `python src/build_full_merged.py --periods 1h 4h 1d`
+    - `python src/build_full_merged.py --periods "1h,4h,1d"`
+
+- 终端日志优化：
+  - 在 `src/indicating.py`、`src/groupwise_rolling_norm.py` 屏蔽 pandas 的 `PerformanceWarning`，避免碎片化 DataFrame 的性能告警刷屏。
+
+- 列名快照：
+  - 新增 `data/merged/full_merged.columns.txt`（长表首行列名快照），便于后续直接遍历字段而无需读取大 CSV。
+
+验证：
+
+- 已核验 `data/crypto_indicated/<1h|4h|1d>` 与 `data/crypto_targeted_and_indicated/<1h|4h|1d>` 的小 CSV 均包含 `beta_btc_60d`/`volume_profile_hvn`/`volume_profile_lvn` 及其归一化派生列。
+- `data/merged/full_merged.csv` 也已包含上述字段（可直接在 `full_merged.columns.txt` 中检索）。
+
+影响文件（关键）：
+
+- `src/indicating.py`（新增 β 与 HVN/LVN 计算、纳入 shift 与归一化、告警屏蔽）
+- `src/groupwise_rolling_norm.py`（告警屏蔽）
+- `src/build_full_merged.py`（`--periods` 参数解析增强）
+- `data/merged/full_merged.columns.txt`（列名快照，运行后生成）
+
+兼容性：
+
+- 下游训练与筛选可直接使用新增列；均已按防泄露口径处理。
+- 原文档中“β/HVN/LVN 留待融合阶段”的说明已更新为在技术面阶段生成。
+
+## 2025-09-22 — 技术指标全面扩展 + 一键构建 full_merged（v0.2.4）
+
+新增/变更：
+
+- 技术面扩展（全部进入 `data/crypto_indicated/<tf>` 并最终汇入 `data/merged/full_merged.csv`）：
+  - Regime/标签：`trend_flag`、`range_flag`、`high_vol_flag`、`stress_flag`（均经 shift(1) 防泄露）
+  - 通道/压缩：`donchian_high_20`、`donchian_low_20`、`keltner_upper_20`、`keltner_lower_20`、`squeeze_on`
+  - 高阶动量/振荡：`ppo`、`stoch_rsi`、`williams_r`、`tsi`
+  - 一目均衡：`ichimoku_conv`、`ichimoku_base`、`ichimoku_span_a`、`ichimoku_span_b`、`cloud_thickness`
+  - 转折/形态：`psar`、`psar_flip_flag`、`supertrend_10_3`、`heikin_ashi_trend`
+  - Tail/Risk：`ret_skew_30d`、`ret_kurt_30d`、`var_95_30d`、`cvar_95_30d`、`z_score_gap`
+  - 蜡烛计数：`engulfing_up_cnt_20`、`doji_ratio_20`、`hammer_cnt_20`
+  - 量价失衡：`mfi`、`cmf`、`price_volume_corr_20`
+  - 横截面/枢轴：`price_position_ma200`、`pivot_point`、`distance_to_pivot`
+  - 时间特征（known_future）：`hour_sin/hour_cos/dow_sin/dow_cos`
+  - 统一派生：对关键列追加 `*_diff1`、`*_slope_24h`；并纳入分组滑动归一化（输出 `_zn48/_mm48`，裁剪至 [-5,5]/[0,1]）
+
+- 归一化与防泄露：
+  - 新增列统一先 `shift(1)` 再参与归一化与训练；继续保留 warm-up 裁剪与 NaN 行清理。
+
+- 过滤（Filter）阶段增强：
+  - 覆盖率阈值分层：`coverage_threshold_base=0.6`、`coverage_threshold_rich=0.3`；`rich_prefixes` 可配。
+  - 多尺度/多滞后按组去冗：`group_patterns`（如 `_roll_\d+$`、`_ewma_\d+$`、`_\d+[smhdw]$`），每组保留前 `keep_n_per_group`。
+  - 自动 IC/MI 目标：未显式配置时，根据目标类型自动拆分（回归→IC，分类→MI）。
+
+- 一键构建脚本：
+  - 新增 `src/build_full_merged.py`：串联 指标→目标→合并。
+  - 使用：`python src/build_full_merged.py --periods 1h,4h,1d`
+
+影响文件（关键）：
+
+- `src/indicators.py`（新增高阶指标实现）
+- `src/indicating.py`（落地计算、shift、防泄露、归一化与派生）
+- `features/selection/filter_stage.py`（分层覆盖率、分组去冗、自动 IC/MI）
+- `src/build_full_merged.py`（新增）
+
+兼容性：
+
+- 新增列对下游非依赖这些字段的训练脚本无破坏；已按防泄露口径处理。
+- `beta_btc_60d`、`volume_profile_hvn/lvn` 保留为后续在融合阶段实现并并入。
+
+## 2025-09-21 — 特征筛选：专家 targets 并集与专家选择接口（v0.2.3）
+
+新增/变更：
+
+- 特征筛选目标并集（union_targets）：
+  - 现在在特征筛选管线中，实际使用的目标集合是“被选择专家的 targets 的并集（去重）”。
+  - 若未选择专家（默认跑全部），则取配置中“所有专家”的并集；若选择了子集（见下），则仅基于该子集计算并集。
+- 专家选择接口：
+  - CLI 新增 `--experts a,b,c` 参数；或在 YAML 中新增 `experts_run: [a, b, c]`。
+  - 若提供上述任一方式，则仅执行所选专家；并集与最终汇总也仅在该子集内进行。
+- Embedded 阶段支持 `targets_override`：
+  - `features/selection/embedded_stage.py` 新增 `targets_override` 并传递至 `load_split(...)`，从而与并集对齐。
+- 管线统一应用并集：
+  - `pipelines/run_feature_screening.py` 计算 `union_targets` 并传入 tree+perm、embedded、wrapper 搜索与后验验证，保证各阶段的目标一致。
+- 过滤阶段（IC/MI）的默认行为：
+  - 若配置中未显式指定 `filter.params.ic_targets`/`mi_targets`，则自动使用并集的回归类目标作为 IC、分类类目标作为 MI；
+  - 如需强制使用并集，可在配置中清空这两个字段以启用默认逻辑，或后续提供“无条件并集”开关。
+
+影响文件（关键）：
+
+- pipelines/run_feature_screening.py（新增专家选择、并集计算与传递）
+- features/selection/embedded_stage.py（新增 `targets_override` 参数与传递）
+- features/selection/filter_stage.py（默认 IC/MI 目标回退至并集拆分）
+
+兼容性：
+
+- 默认行为不破坏既有配置；未指定 `--experts`/`experts_run` 时仍对所有专家执行。
+- 若历史脚本依赖旧的 embedded 阶段行为（不覆盖 targets），现在将以并集为准，结果更一致。
+
+## 2025-09-21 — 特征筛选高级特性（VSN/era/GA seeds/质量权重）（v0.2.3+）
+
+新增/变更：
+
+- Embedded 纳入 TFT VSN 权重：`tft_vsn_importance` 列参与综合打分；配置项 `embedded.params.use_vsn/vsn_csv`。
+- IC/MI 限于训练窗：`ic_mi.csv` 增补 `window_start/window_end`。
+- 时间置换输出增强：新增 `perm_ci95_low/high` 与 `block_len/embargo/purge` 元数据，附带 `era`（若可得）。
+- 跨 era 出现率阈值：`aggregation.min_appear_rate_era` 支持按 era 稳定性过滤。
+- GA 多 seed：`wrapper.ga.seeds` 支持多次运行并输出 `ga_gene_frequency.csv`。
+- RFE 近似器：优先 LightGBM，其次 CatBoost/XGBoost，减少计算成本。
+- Base/Rich 融合引入质量权重：`aggregation.rich_quality_weights` 可按 period 对 Rich 权重缩放。
+- 前瞻对照：`finalize.forward_compare.enabled` 开启后输出 `forward_eval.csv` 与 `summary.json` 摘要。
+
+影响文件（关键）：
+
+- features/selection/embedded_stage.py
+- features/selection/filter_stage.py
+- features/selection/tree_perm.py
+- features/selection/aggregate_core.py
+- features/selection/combine_channels.py
+- features/selection/optimize_subset.py
+- pipelines/run_feature_screening.py
+- pipelines/configs/feature_selection.yaml（新增配置项）
+
+文档：
+
+- README.md 已新增“新增高级特性（v0.2.3）”与配置示例。
+
 ## 2025-09-20 — 专家数据管线与文档梳理（v0.2.1）
 ## 2025-09-21 — 训练与特征筛选体验改进（v0.2.2）
 

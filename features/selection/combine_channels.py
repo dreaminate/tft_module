@@ -30,10 +30,12 @@ def _group_pairs(df: pd.DataFrame) -> Dict[Tuple[str, str], pd.DataFrame]:
     return out
 
 
-def _fuse_pair_scores(
+def _fuse_pair_scores_with_quality(
     base_df: pd.DataFrame,
     rich_df: pd.DataFrame,
+    rich_quality_weights: Dict[str, float] | None = None,
 ) -> pd.DataFrame:
+    rich_quality_weights = rich_quality_weights or {}
     base_pairs = _group_pairs(base_df)
     rich_pairs = _group_pairs(rich_df)
     all_pairs = sorted(set(base_pairs.keys()) | set(rich_pairs.keys()))
@@ -45,10 +47,19 @@ def _fuse_pair_scores(
         sr = _score_to01(float(dr["base_score"].dropna().iloc[0])) if dr is not None and "base_score" in dr.columns else 0.0
         denom = max(1e-8, sb + sr)
         w_r = float(sr / denom) if denom > 0 else 0.5
+        # quality weight per period (e.g., based on missing rate/latency)
+        q = float(rich_quality_weights.get(str(per), 1.0))
+        w_r = max(0.0, min(1.0, w_r * q))
         w_b = 1.0 - w_r
         fused: Dict[str, float] = {}
         base_vals: Dict[str, float] = {}
         rich_vals: Dict[str, float] = {}
+        # propagate era if available
+        era_tag = None
+        if db is not None and "era" in db.columns and not db["era"].isna().all():
+            era_tag = str(db["era"].dropna().iloc[0])
+        if era_tag is None and dr is not None and "era" in dr.columns and not dr["era"].isna().all():
+            era_tag = str(dr["era"].dropna().iloc[0])
         if db is not None:
             for _, r in db.iterrows():
                 feat = str(r["feature"])
@@ -64,20 +75,21 @@ def _fuse_pair_scores(
         if not fused:
             continue
         for feat, score in fused.items():
-            rows.append(
-                {
-                    "feature": feat,
-                    "period": per,
-                    "target": tgt,
-                    "score_local": score,
-                    "score_base": base_vals.get(feat, 0.0),
-                    "score_rich": rich_vals.get(feat, 0.0),
-                    "w_base": w_b,
-                    "w_rich": w_r,
-                    "base_metric": sb,
-                    "rich_metric": sr,
-                }
-            )
+            row = {
+                "feature": feat,
+                "period": per,
+                "target": tgt,
+                "score_local": score,
+                "score_base": base_vals.get(feat, 0.0),
+                "score_rich": rich_vals.get(feat, 0.0),
+                "w_base": w_b,
+                "w_rich": w_r,
+                "base_metric": sb,
+                "rich_metric": sr,
+            }
+            if era_tag is not None:
+                row["era"] = era_tag
+            rows.append(row)
     if not rows:
         raise SystemExit("[err] no overlapping pairs to combine for base/rich")
     dfp = pd.DataFrame(rows)
@@ -94,10 +106,12 @@ def combine_channels(
     topk: int,
     topk_per_pair: int | None,
     min_appear_rate: float | None,
+    rich_quality_weights: Dict[str, float] | None = None,
+    min_appear_rate_era: float | None = None,
 ) -> pd.DataFrame:
     base_df = aggregate_tree_perm(base_dir) if base_dir and os.path.exists(base_dir) else pd.DataFrame()
     rich_df = aggregate_tree_perm(rich_dir) if rich_dir and os.path.exists(rich_dir) else pd.DataFrame()
-    fused_pairs = _fuse_pair_scores(base_df, rich_df)
+    fused_pairs = _fuse_pair_scores_with_quality(base_df, rich_df, rich_quality_weights)
     core = build_unified_core(
         fused_pairs,
         weights_yaml,
@@ -106,6 +120,7 @@ def combine_channels(
         tft_file=None,
         topk_per_pair=topk_per_pair,
         min_appear_rate=min_appear_rate,
+        min_appear_rate_era=min_appear_rate_era,
     )
     return core
 

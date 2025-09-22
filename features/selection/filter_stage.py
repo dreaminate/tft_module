@@ -2,18 +2,23 @@
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Tuple
+from typing import Dict, Iterable, List, Tuple, Optional
+import re
 
 import numpy as np
 import pandas as pd
 from sklearn.feature_selection import mutual_info_classif
 
-from .common import DatasetSplit, load_split, safe_numeric_copy
+from .common import DatasetSplit, load_split, safe_numeric_copy, is_classification_target
 
 
 @dataclass
 class FilterParams:
     coverage_threshold: float = 0.4
+    # 分层覆盖率阈值（优先于 coverage_threshold）。若任一为 None 则退化为 coverage_threshold。
+    coverage_threshold_base: Optional[float] = 0.6
+    coverage_threshold_rich: Optional[float] = 0.3
+    rich_prefixes: Iterable[str] = ("onchain_", "funding_", "oi_", "basis_", "etf_")
     variance_threshold: float = 1e-8
     corr_threshold: float = 0.97
     vif_threshold: float = 20.0
@@ -21,6 +26,11 @@ class FilterParams:
     suffix_dedup: Iterable[str] = ("_zn", "_mm")
     ic_targets: Iterable[str] | None = None
     mi_targets: Iterable[str] | None = None
+    # 多尺度/多滞后按组去冗
+    group_patterns: Iterable[str] = (r"_roll_\d+$", r"_ewma_\d+$", r"_\d+[smhdw]$")
+    keep_n_per_group: int = 1
+    # 自动推断 IC/MI 目标（当 ic_targets/mi_targets 未提供时）
+    auto_ic_mi: bool = True
 
 
 @dataclass
@@ -134,13 +144,62 @@ def _choose_representatives(
     return keep, mapping
 
 
+def _build_coverage_keep_mask(
+    coverage: pd.Series,
+    params: FilterParams,
+) -> pd.Series:
+    # 若提供分层阈值，则按前缀区分 Rich 与 Base；否则使用统一阈值
+    if params.coverage_threshold_base is None or params.coverage_threshold_rich is None:
+        thr = float(params.coverage_threshold)
+        return coverage >= thr
+    rich_prefixes = tuple(params.rich_prefixes or ())
+    def _is_rich(name: str) -> bool:
+        return any(str(name).startswith(p) for p in rich_prefixes)
+    thr_series = pd.Series(
+        [params.coverage_threshold_rich if _is_rich(f) else params.coverage_threshold_base for f in coverage.index],
+        index=coverage.index,
+        dtype=float,
+    )
+    return coverage >= thr_series
+
+
+def _group_by_patterns(features: List[str], patterns: Iterable[str]) -> Dict[str, List[str]]:
+    comps = [re.compile(p) for p in patterns or ()]
+    def _strip(name: str) -> str:
+        base = str(name)
+        changed = True
+        while changed:
+            changed = False
+            for cp in comps:
+                new_base = cp.sub("", base)
+                if new_base != base:
+                    base = new_base
+                    changed = True
+        return base
+    groups: Dict[str, List[str]] = {}
+    for f in features:
+        key = _strip(f)
+        groups.setdefault(key, []).append(f)
+    return groups
+
+
 def _ic_mi_scores(
     ds: DatasetSplit,
     params: FilterParams,
     stats: pd.DataFrame,
 ) -> pd.DataFrame:
     rows = []
-    data = pd.concat([ds.train, ds.val], ignore_index=True)
+    # 仅使用滚动训练窗（防止信息泄露）
+    data = ds.train.copy()
+    # 记录窗口边界
+    win_start = None
+    win_end = None
+    if "datetime" in data.columns:
+        try:
+            win_start = pd.to_datetime(data["datetime"]).min()
+            win_end = pd.to_datetime(data["datetime"]).max()
+        except Exception:
+            win_start, win_end = None, None
     X = safe_numeric_copy(data[stats.index])
     med = X.median(axis=0, numeric_only=True)
     X = X.fillna(med)
@@ -154,6 +213,8 @@ def _ic_mi_scores(
                         "target": tgt,
                         "metric": "ic",
                         "value": float(X[feat].corr(y, method="spearman")),
+                        "window_start": str(win_start) if win_start is not None else None,
+                        "window_end": str(win_end) if win_end is not None else None,
                     }
                 )
     for tgt in params.mi_targets or []:
@@ -167,6 +228,8 @@ def _ic_mi_scores(
                         "target": tgt,
                         "metric": "mi",
                         "value": float(val),
+                        "window_start": str(win_start) if win_start is not None else None,
+                        "window_end": str(win_end) if win_end is not None else None,
                     }
                 )
     return pd.DataFrame(rows)
@@ -205,7 +268,7 @@ def run_filter_stage(
     stats.index.name = "feature"
 
     dropped_rows = []
-    keep_mask = coverage >= params.coverage_threshold
+    keep_mask = _build_coverage_keep_mask(coverage, params)
     dropped_rows.extend(
         [
             (f, "coverage", coverage[f])
@@ -214,7 +277,10 @@ def run_filter_stage(
     )
     numeric_df = numeric_df.loc[:, keep_mask.values]
     stats = stats.loc[keep_mask]
-    print(f"[filter] step1 coverage>= {params.coverage_threshold} | kept={numeric_df.shape[1]} dropped={len(features)-numeric_df.shape[1]}", flush=True)
+    print(
+        f"[filter] step1 coverage (base={params.coverage_threshold_base}, rich={params.coverage_threshold_rich}, fallback={params.coverage_threshold}) | kept={numeric_df.shape[1]} dropped={len(features)-numeric_df.shape[1]}",
+        flush=True,
+    )
 
     low_var_mask = stats["variance"] >= params.variance_threshold
     dropped_rows.extend(
@@ -227,10 +293,33 @@ def run_filter_stage(
     stats = stats.loc[low_var_mask]
     print(f"[filter] step2 variance>= {params.variance_threshold} | kept={numeric_df.shape[1]}", flush=True)
 
+    # Step 2.5: 多尺度/多滞后按组去冗（基于 coverage/variance 选代表，保留前 keep_n 个）
+    group_map_rows: List[Tuple[str, str, str]] = []  # (feature, group_rep, group_key)
+    if numeric_df.shape[1] > 0 and (params.group_patterns or ()) and int(params.keep_n_per_group) >= 1:
+        groups = _group_by_patterns(list(numeric_df.columns), params.group_patterns)
+        keep_cols: List[str] = []
+        for gkey, members in groups.items():
+            if not members:
+                continue
+            sub = stats.loc[members].sort_values(["coverage", "variance"], ascending=[False, False])
+            reps = sub.index.tolist()[: int(params.keep_n_per_group)]
+            keep_cols.extend(reps)
+            rep0 = reps[0]
+            for m in members:
+                if m not in reps:
+                    dropped_rows.append((m, "group_dedup", rep0))
+                    group_map_rows.append((m, rep0, gkey))
+        keep_cols = list(dict.fromkeys(keep_cols))
+        numeric_df = numeric_df.loc[:, keep_cols]
+        stats = stats.loc[keep_cols]
+        print(f"[filter] step2.5 group_dedup patterns={list(params.group_patterns)} keep_n={int(params.keep_n_per_group)} | kept={numeric_df.shape[1]}", flush=True)
+
     if numeric_df.shape[1] == 0:
         dropped_df = pd.DataFrame(dropped_rows, columns=["feature", "reason", "value"])
         stats.to_csv(out_dir / "filter_stats.csv")
         dropped_df.to_csv(out_dir / "dropped.csv", index=False)
+        if group_map_rows:
+            pd.DataFrame(group_map_rows, columns=["feature", "group_rep", "group_key"]).to_csv(out_dir / "group_map.csv", index=False)
         allow = out_dir / "allowlist.txt"
         allow.write_text("", encoding="utf-8")
         return FilterResult([], dropped_df, stats, pd.DataFrame(), allow)
@@ -258,6 +347,17 @@ def run_filter_stage(
         dropped_rows.append((worst, "vif", float(max_vif)))
         print(f"[filter] step4 VIF iter={vif_iter}/{params.max_vif_iter} | drop={worst} max_vif={float(max_vif):.3f} kept={len(keep_features)}", flush=True)
 
+    # 自动推断 IC/MI 目标
+    if params.auto_ic_mi and (not params.ic_targets and not params.mi_targets):
+        ic_list: List[str] = []
+        mi_list: List[str] = []
+        for t in ds.targets:
+            if is_classification_target(t):
+                mi_list.append(t)
+            else:
+                ic_list.append(t)
+        params.ic_targets = tuple(ic_list) if ic_list else None
+        params.mi_targets = tuple(mi_list) if mi_list else None
     icmi = _ic_mi_scores(ds, params, stats.loc[keep_features])
     print(f"[filter] step5 IC/MI | rows={len(icmi)}", flush=True)
 
@@ -269,6 +369,8 @@ def run_filter_stage(
     dropped_df.to_csv(out_dir / "dropped.csv", index=False)
     if not icmi.empty:
         icmi.to_csv(out_dir / "ic_mi.csv", index=False)
+    if group_map_rows:
+        pd.DataFrame(group_map_rows, columns=["feature", "group_rep", "group_key"]).to_csv(out_dir / "group_map.csv", index=False)
 
     allow_path = out_dir / "allowlist.txt"
     with allow_path.open("w", encoding="utf-8") as fh:
@@ -293,6 +395,9 @@ def run_filter_for_channel(
     if params_dict:
         params = FilterParams(
             coverage_threshold=float(params_dict.get("coverage_threshold", params.coverage_threshold)),
+            coverage_threshold_base=params_dict.get("coverage_threshold_base", params.coverage_threshold_base),
+            coverage_threshold_rich=params_dict.get("coverage_threshold_rich", params.coverage_threshold_rich),
+            rich_prefixes=tuple(params_dict.get("rich_prefixes", params.rich_prefixes)),
             variance_threshold=float(params_dict.get("variance_threshold", params.variance_threshold)),
             corr_threshold=float(params_dict.get("corr_threshold", params.corr_threshold)),
             vif_threshold=float(params_dict.get("vif_threshold", params.vif_threshold)),
@@ -300,6 +405,9 @@ def run_filter_for_channel(
             suffix_dedup=tuple(params_dict.get("suffix_dedup", params.suffix_dedup)),
             ic_targets=params_dict.get("ic_targets"),
             mi_targets=params_dict.get("mi_targets"),
+            group_patterns=tuple(params_dict.get("group_patterns", params.group_patterns)),
+            keep_n_per_group=int(params_dict.get("keep_n_per_group", params.keep_n_per_group)),
+            auto_ic_mi=bool(params_dict.get("auto_ic_mi", params.auto_ic_mi)),
         )
     return run_filter_stage(
         pkl_path=pkl_path,

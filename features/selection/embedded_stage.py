@@ -7,7 +7,7 @@ from typing import Dict, Iterable, List, Optional
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
-from sklearn.linear_model import ElasticNetCV, LogisticRegressionCV
+from sklearn.linear_model import ElasticNetCV, LogisticRegressionCV, RidgeCV, LassoCV
 from sklearn.exceptions import ConvergenceWarning
 import warnings
 from sklearn.preprocessing import StandardScaler
@@ -18,6 +18,8 @@ try:  # optional SHAP support
     import shap
 except Exception:  # pragma: no cover - shap optional
     shap = None
+
+# note: do not globally silence convergence warnings; handle per-fit with fallback
 
 
 @dataclass
@@ -34,6 +36,15 @@ class EmbeddedParams:
     # GPU/backend controls
     tree_backend: str = "xgboost"  # xgboost | catboost | sklearn
     use_gpu: bool = True
+    # Optional VSN integration
+    use_vsn: bool = True
+    vsn_csv: Optional[str] = None
+    # Weighted aggregation of evidence
+    w_tree: float = 1.0
+    w_linear: float = 1.0
+    w_boruta: float = 1.0
+    w_shap: float = 1.0
+    w_vsn: float = 1.0
 
 
 @dataclass
@@ -222,22 +233,50 @@ def _run_linear_path(X: np.ndarray, y: np.ndarray, cols: List[str], is_cls: bool
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
     if is_cls:
+        coef = None
+        # Try robust L1 with saga first
         try:
             model = LogisticRegressionCV(
-                Cs=8,
+                Cs=[0.01, 0.1, 1.0, 10.0],
                 cv=params.linear_cv,
                 penalty="l1",
-                solver="liblinear",
+                solver="saga",
                 max_iter=params.linear_max_iter,
                 n_jobs=1,
+                multi_class="auto",
             )
             with warnings.catch_warnings():
-                warnings.filterwarnings("ignore", category=ConvergenceWarning)
+                warnings.filterwarnings("error", category=ConvergenceWarning)
                 model.fit(X_scaled, y)
-            coef = np.abs(model.coef_).mean(axis=0)
+            coef_abs = np.abs(model.coef_).mean(axis=0)
+            # clip extreme coefficients at 99th percentile for stability
+            cap = float(np.percentile(coef_abs, 99)) if np.isfinite(coef_abs).any() else float("inf")
+            coef = np.clip(coef_abs, 0.0, cap)
         except Exception:
-            coef = np.zeros(X.shape[1], dtype=float)
+            pass
+        # Fallback to stable L2 with lbfgs
+        if coef is None or not np.isfinite(np.asarray(coef)).all():
+            try:
+                model = LogisticRegressionCV(
+                    Cs=[0.01, 0.1, 1.0, 10.0],
+                    cv=params.linear_cv,
+                    penalty="l2",
+                    solver="lbfgs",
+                    max_iter=params.linear_max_iter,
+                    n_jobs=1,
+                    multi_class="auto",
+                )
+                with warnings.catch_warnings():
+                    warnings.filterwarnings("error", category=ConvergenceWarning)
+                    model.fit(X_scaled, y)
+                coef_abs = np.abs(model.coef_).mean(axis=0)
+                cap = float(np.percentile(coef_abs, 99)) if np.isfinite(coef_abs).any() else float("inf")
+                coef = np.clip(coef_abs, 0.0, cap)
+            except Exception:
+                coef = np.zeros(X.shape[1], dtype=float)
     else:
+        coef = None
+        # Primary: ElasticNetCV
         try:
             model = ElasticNetCV(
                 l1_ratio=[0.1, 0.5, 0.9],
@@ -246,17 +285,41 @@ def _run_linear_path(X: np.ndarray, y: np.ndarray, cols: List[str], is_cls: bool
                 n_jobs=params.n_jobs,
             )
             with warnings.catch_warnings():
-                warnings.filterwarnings("ignore", category=ConvergenceWarning)
+                warnings.filterwarnings("error", category=ConvergenceWarning)
                 model.fit(X_scaled, y)
-            coef = np.abs(model.coef_)
+            coef_abs = np.abs(model.coef_)
+            cap = float(np.percentile(coef_abs, 99)) if np.isfinite(coef_abs).any() else float("inf")
+            coef = np.clip(coef_abs, 0.0, cap)
         except Exception:
-            coef = np.zeros(X.shape[1], dtype=float)
+            pass
+        # Fallback 1: RidgeCV (stable closed-form-like)
+        if coef is None or not np.isfinite(np.asarray(coef)).all():
+            try:
+                ridge = RidgeCV(alphas=[0.1, 1.0, 10.0, 100.0])
+                ridge.fit(X_scaled, y)
+                coef_abs = np.abs(getattr(ridge, "coef_", np.zeros(X.shape[1])))
+                cap = float(np.percentile(coef_abs, 99)) if np.isfinite(coef_abs).any() else float("inf")
+                coef = np.clip(coef_abs, 0.0, cap)
+            except Exception:
+                pass
+        # Fallback 2: LassoCV as sparsity alternative
+        if coef is None or not np.isfinite(np.asarray(coef)).all():
+            try:
+                lasso = LassoCV(max_iter=params.linear_max_iter, n_jobs=params.n_jobs)
+                with warnings.catch_warnings():
+                    warnings.filterwarnings("error", category=ConvergenceWarning)
+                    lasso.fit(X_scaled, y)
+                coef_abs = np.abs(getattr(lasso, "coef_", np.zeros(X.shape[1])))
+                cap = float(np.percentile(coef_abs, 99)) if np.isfinite(coef_abs).any() else float("inf")
+                coef = np.clip(coef_abs, 0.0, cap)
+            except Exception:
+                coef = np.zeros(X.shape[1], dtype=float)
     return pd.Series(coef, index=cols, dtype=float)
 
 
-def _aggregate_scores(rows: List[pd.DataFrame]) -> pd.DataFrame:
+def _aggregate_scores(rows: List[pd.DataFrame], *, weights: Optional[Dict[str, float]] = None) -> pd.DataFrame:
     if not rows:
-        return pd.DataFrame(columns=["feature", "period", "target", "tree_importance", "boruta_keep", "linear_coef", "shap_value", "score_embedded"])
+        return pd.DataFrame(columns=["feature", "period", "target", "tree_importance", "boruta_keep", "linear_coef", "shap_value", "tft_vsn_importance", "score_embedded"])
     df = pd.concat(rows, ignore_index=True)
     groups = df.groupby(["period", "target"], sort=False)
     n = groups["feature"].transform("count").astype(float).clip(lower=1.0)
@@ -269,9 +332,26 @@ def _aggregate_scores(rows: List[pd.DataFrame]) -> pd.DataFrame:
     if "shap_value" in df.columns:
         shap_rank = groups["shap_value"].rank(method="average", ascending=False)
         shap_score = 1.0 - (shap_rank - 1.0) / np.where(n > 1.0, n - 1.0, 1.0)
-    stacked = np.vstack([tree_score, linear_score, df["boruta_score"].to_numpy(), shap_score])
-    denom = np.maximum(1.0, np.sum(stacked > 0, axis=0))
-    df["score_embedded"] = np.nan_to_num(stacked.sum(axis=0) / denom)
+    vsn_score = np.zeros(len(df), dtype=float)
+    if "tft_vsn_importance" in df.columns:
+        vsn_rank = groups["tft_vsn_importance"].rank(method="average", ascending=False)
+        vsn_score = 1.0 - (vsn_rank - 1.0) / np.where(n > 1.0, n - 1.0, 1.0)
+    # weighted aggregation
+    w = dict(weights or {})
+    w_tree = float(w.get("tree", 1.0))
+    w_linear = float(w.get("linear", 1.0))
+    w_boruta = float(w.get("boruta", 1.0))
+    w_shap = float(w.get("shap", 1.0))
+    w_vsn = float(w.get("vsn", 1.0))
+    num = (
+        w_tree * tree_score
+        + w_linear * linear_score
+        + w_boruta * df["boruta_score"].to_numpy()
+        + w_shap * shap_score
+        + w_vsn * vsn_score
+    )
+    denom = np.maximum(1e-12, (w_tree * (tree_score > -1)).astype(float) + (w_linear * (linear_score > -1)).astype(float) + (w_boruta * (df["boruta_score"].to_numpy() >= 0)).astype(float) + (w_shap * (shap_score >= 0)).astype(float) + (w_vsn * (vsn_score >= 0)).astype(float))
+    df["score_embedded"] = np.nan_to_num(num / denom)
     return df
 
 
@@ -284,10 +364,12 @@ def run_embedded_stage(
     val_days: int,
     val_ratio: float,
     allowlist_path: Optional[str],
-    params: EmbeddedParams,
+    params: Optional[EmbeddedParams] = None,
+    targets_override: Optional[List[str]] = None,
 ) -> EmbeddedResult:
     out_dir = _output_dir(expert_name, channel)
     out_dir.mkdir(parents=True, exist_ok=True)
+    params = params or EmbeddedParams()
     print(f"[embedded] expert={expert_name} channel={channel} | backend={params.tree_backend} gpu={params.use_gpu}", flush=True)
     ds = load_split(
         pkl_path=pkl_path,
@@ -295,10 +377,31 @@ def run_embedded_stage(
         val_days=val_days,
         val_ratio=val_ratio,
         allowlist_path=allowlist_path,
+        targets_override=targets_override,
     )
     rows: List[pd.DataFrame] = []
     periods = ds.periods
     features = ds.features
+
+    # optional: load VSN (variable selection) importance from TFT checkpoint exported CSV
+    vsn_scores_map: Dict[str, float] = {}
+    if params.use_vsn:
+        cand_paths = []
+        if params.vsn_csv:
+            cand_paths.append(params.vsn_csv)
+        # conventional locations
+        out_dir = _output_dir(expert_name, channel)
+        cand_paths.append(str(out_dir.parent / "tft_gating.csv"))
+        cand_paths.append(str(out_dir / "tft_gating.csv"))
+        for pth in cand_paths:
+            try:
+                if pth and Path(pth).exists():
+                    df_vsn = pd.read_csv(pth)
+                    if {"feature", "score"}.issubset(df_vsn.columns):
+                        vsn_scores_map = {str(r["feature"]): float(r["score"]) for _, r in df_vsn.iterrows()}
+                        break
+            except Exception:
+                pass
 
     for period in periods:
         tr_df = ds.train[ds.train["period"].astype(str) == str(period)]
@@ -318,6 +421,7 @@ def run_embedded_stage(
             tree_imp, shap_val = _fit_tree_importance(X, y, cols, is_cls, params)
             boruta_score = _run_boruta_like(X, y, cols, is_cls, params)
             linear_coef = _run_linear_path(X, y, cols, is_cls, params)
+            vsn_vals = pd.Series({c: float(vsn_scores_map.get(c, np.nan)) for c in cols}, dtype=float)
             sub = pd.DataFrame({
                 "feature": cols,
                 "period": str(period),
@@ -326,16 +430,26 @@ def run_embedded_stage(
                 "boruta_keep": boruta_score.reindex(cols).fillna(0.0).to_numpy(),
                 "linear_coef": linear_coef.reindex(cols).fillna(0.0).to_numpy(),
                 "shap_value": shap_val.reindex(cols).fillna(0.0).to_numpy(),
+                "tft_vsn_importance": vsn_vals.reindex(cols).fillna(0.0).to_numpy(),
             })
             rows.append(sub)
-    summary = _aggregate_scores(rows)
+    weight_map = {
+        "tree": float(params.w_tree),
+        "linear": float(params.w_linear),
+        "boruta": float(params.w_boruta),
+        "shap": float(params.w_shap),
+        "vsn": float(params.w_vsn),
+    }
+    summary = _aggregate_scores(rows, weights=weight_map)
     print(f"[embedded] done | rows={len(summary)} out_dir={out_dir}", flush=True)
 
-    raw_scores = pd.concat(rows, ignore_index=True) if rows else pd.DataFrame(columns=["feature", "period", "target", "tree_importance", "boruta_keep", "linear_coef", "shap_value"])
+    raw_scores = pd.concat(rows, ignore_index=True) if rows else pd.DataFrame(columns=["feature", "period", "target", "tree_importance", "boruta_keep", "linear_coef", "shap_value", "tft_vsn_importance"])
     if not raw_scores.empty:
         raw_scores.to_csv(out_dir / "raw_scores.csv", index=False)
     if not summary.empty:
         summary.to_csv(out_dir / "summary.csv", index=False)
+        # evidence 明细（便于文档汇总）
+        summary.to_csv(out_dir / "embedded_evidence.csv", index=False)
 
     allow_path = None
     if not summary.empty:
@@ -356,7 +470,8 @@ def run_embedded_for_channel(
     val_days: int,
     val_ratio: float,
     allowlist_path: Optional[str],
-    cfg: Dict[str, object] | None,
+    targets_override: Optional[List[str]] = None,
+    cfg: Dict[str, object] | None = None,
 ) -> EmbeddedResult:
     params = EmbeddedParams()
     if cfg:
@@ -372,6 +487,11 @@ def run_embedded_for_channel(
             n_jobs=int(cfg.get("n_jobs", params.n_jobs)),
             tree_backend=str(cfg.get("tree_backend", params.tree_backend)),
             use_gpu=bool(cfg.get("use_gpu", params.use_gpu)),
+            w_tree=float(cfg.get("w_tree", params.w_tree)),
+            w_linear=float(cfg.get("w_linear", params.w_linear)),
+            w_boruta=float(cfg.get("w_boruta", params.w_boruta)),
+            w_shap=float(cfg.get("w_shap", params.w_shap)),
+            w_vsn=float(cfg.get("w_vsn", params.w_vsn)),
         )
     return run_embedded_stage(
         pkl_path=pkl_path,
@@ -381,5 +501,6 @@ def run_embedded_for_channel(
         val_days=val_days,
         val_ratio=val_ratio,
         allowlist_path=allowlist_path,
+        targets_override=targets_override,
         params=params,
     )

@@ -2,6 +2,11 @@
 import os
 import pandas as pd
 import numpy as np
+import warnings
+from pandas.errors import PerformanceWarning
+
+# 屏蔽 pandas 的性能告警，避免终端刷屏
+warnings.filterwarnings("ignore", category=PerformanceWarning)
 from sklearn.neighbors import LocalOutlierFactor
 
 # === 自研指标库 ===
@@ -18,6 +23,10 @@ from indicators import (
     obv_diff, obv_pct_change, obv_slope,
     atr_ratio_price, atr_ratio_range, atr_change, range_to_atr,
     boll_pctb, boll_bandwidth,
+    # 新增扩展
+    donchian_channel, keltner_channel, calculate_ppo, stoch_rsi, williams_r, tsi,
+    ichimoku, psar, supertrend, heikin_ashi_trend,
+    money_flow_index, chaikin_money_flow, price_volume_corr, pivot_point, linear_slope,
 )
 
 # 新增：局部归一化工具
@@ -38,6 +47,18 @@ def indicating_main(timeframe="1h"):
         "boll_feats": True,
         "local_norm": True,   # 新增：是否做局部滑动归一化
         "lof": False,          # 是否做 LOF
+        # === 扩展开关 ===
+        "regime_flags": True,
+        "channels_squeeze": True,
+        "hi_momentum": True,
+        "ichimoku": True,
+        "turning_psar_supertrend": True,
+        "tail_risk": True,
+        "candlestick_counts": True,
+        "pv_imbalance": True,
+        "cross_section": True,
+        "pivot_hvn": True,
+        "time_features": True,
         
     }
 
@@ -50,6 +71,22 @@ def indicating_main(timeframe="1h"):
     # 4) 滑动窗口（按周期）
     tf2win = {"1h": 48, "4h": 48, "1d": 48}
     win = tf2win.get(timeframe, 48)
+
+    # 4.1 预计算 BTC 基准收益（按当前周期）
+    btc_r_map = None
+    btc_path = os.path.join(input_dir, f"BTC_USDT_{timeframe}_all.csv")
+    if os.path.exists(btc_path):
+        try:
+            btc_df = pd.read_csv(btc_path, parse_dates=["datetime"])
+            for col in ["open", "high", "low", "close", "volume"]:
+                suffixed = f"{col}_BTC_USDT_{timeframe}"
+                if suffixed in btc_df.columns:
+                    btc_df.rename(columns={suffixed: col}, inplace=True)
+            btc_df["log_close"] = np.log(btc_df["close"].replace(0, np.nan))
+            btc_df["r_btc"] = btc_df["log_close"].diff()
+            btc_r_map = dict(zip(btc_df["datetime"].values, btc_df["r_btc"].values))
+        except Exception:
+            btc_r_map = None
 
     for fname in os.listdir(input_dir):
         if not fname.endswith(".csv"):
@@ -108,6 +145,217 @@ def indicating_main(timeframe="1h"):
             df["adx_scaled"] = df["adx"] / 100.0
         if enabled["vwap"]:
             df["vwap"] = calculate_vwap(df, column_price=close_col, column_volume=vol_col, high_col=high_col, low_col=low_col)
+
+        # === A. Regime flags ===
+        if enabled["regime_flags"]:
+            # hist vol (realized) 近似：使用 close 的 rolling std（对数收益）
+            r = np.log(df[close_col].replace(0, np.nan)).diff()
+            std_20 = r.rolling(20, min_periods=10).std()
+            ret_20 = r.rolling(20, min_periods=10).sum()
+            std_1d = r.rolling(24 if timeframe=="1h" else (6 if timeframe=="4h" else 1), min_periods=1).std()
+
+            df["trend_flag"] = ((df.get("adx", 0) > 25) & (ret_20.abs() > 2.0 * std_20)).astype(int)
+            bw = None
+            if {"boll_upper","boll_lower","ma20"}.issubset(df.columns):
+                bw = boll_bandwidth(df)
+                df["boll_bandwidth"] = df.get("boll_bandwidth", bw)
+            atr_ratio = (df["atr"] / (df[close_col].abs() + 1e-9)) if "atr" in df.columns else pd.Series(0, index=df.index)
+            df["range_flag"] = ((atr_ratio < 0.008) & (df.get("adx", 0) < 15) & ((df.get("boll_bandwidth", bw) if bw is not None else 0) < (df.get("boll_bandwidth", 0).rolling(500).quantile(0.3)))).astype(int)
+            df["high_vol_flag"] = ((std_20 > std_20.rolling(100).quantile(0.7)) & (df.get("adx", 0) < 15)).astype(int)
+            # stress 简化：极端负收益，若未来接入清算/资金费率可再增强
+            df["stress_flag"] = ((r < -4.0 * (std_1d.replace(0, np.nan)))).astype(int)
+
+        # === B. 通道 & 压缩 ===
+        if enabled["channels_squeeze"]:
+            dch, dcl = donchian_channel(df, window=20, high_col=high_col, low_col=low_col)
+            df["donchian_high_20"] = dch
+            df["donchian_low_20"] = dcl
+            kc_mid, kc_up, kc_low = keltner_channel(df, period=20, multiplier=1.5, price_col=close_col, high_col=high_col, low_col=low_col)
+            df["keltner_upper_20"] = kc_up
+            df["keltner_lower_20"] = kc_low
+            if {"boll_upper","boll_lower","ma20"}.issubset(df.columns):
+                width_bb = boll_bandwidth(df)
+                width_kc = (kc_up - kc_low) / (df["ma20"].abs() + 1e-9)
+                perc = width_kc.rolling(500, min_periods=100).apply(lambda x: (x < x.iloc[-1]).mean())
+                df["squeeze_on"] = ((width_bb < width_kc) & (perc < 0.3)).astype(int)
+
+        # === C. 高阶动量/振荡 ===
+        if enabled["hi_momentum"]:
+            df["ppo"] = calculate_ppo(df, column=close_col)
+            df["stoch_rsi"] = stoch_rsi(df, column=close_col)
+            df["williams_r"] = williams_r(df, high_col=high_col, low_col=low_col, close_col=close_col)
+            df["tsi"] = tsi(df, column=close_col)
+
+        # === D. 一目均衡 ===
+        if enabled["ichimoku"]:
+            conv, base, span_a, span_b = ichimoku(df, high_col=high_col, low_col=low_col)
+            df["ichimoku_conv"] = conv
+            df["ichimoku_base"] = base
+            df["ichimoku_span_a"] = span_a
+            df["ichimoku_span_b"] = span_b
+            df["cloud_thickness"] = (span_b - span_a)
+
+        # === E. 转折 & 形态 ===
+        if enabled["turning_psar_supertrend"]:
+            ps, flip = psar(df, high_col=high_col, low_col=low_col)
+            df["psar"] = ps
+            df["psar_flip_flag"] = flip
+            df["supertrend_10_3"] = supertrend(df, period=10, multiplier=3.0, high_col=high_col, low_col=low_col, close_col=close_col)
+            df["heikin_ashi_trend"] = heikin_ashi_trend(df)
+
+        # === F. Tail & Risk ===
+        if enabled["tail_risk"]:
+            rlog = np.log(df[close_col].replace(0, np.nan)).diff()
+            win = 30 if timeframe != "1d" else 30
+            df["ret_skew_30d"] = rlog.rolling(win, min_periods=10).skew()
+            df["ret_kurt_30d"] = rlog.rolling(win, min_periods=10).kurt()
+            # VaR / CVaR 粗略近似（历史分位）
+            q = rlog.rolling(win, min_periods=10).quantile(0.05)
+            df["var_95_30d"] = q
+            # CVaR 近似：低于分位的平均
+            def _cvar(x):
+                if len(x.dropna()) == 0:
+                    return np.nan
+                qv = np.nanquantile(x, 0.05)
+                y = x[x <= qv]
+                return float(y.mean()) if len(y) else np.nan
+            df["cvar_95_30d"] = rlog.rolling(win, min_periods=10).apply(_cvar, raw=False)
+            df["z_score_gap"] = (df["open"] - df["close"].shift(1)) / (df.get("atr", 1.0) + 1e-9)
+
+        # === G. 蜡烛型计数（简化版占比/计数） ===
+        if enabled["candlestick_counts"]:
+            body = (df["close"] - df["open"]).abs()
+            range_ = (df["high"] - df["low"]).replace(0, np.nan)
+            doji = (body / range_ < 0.1).astype(int)
+            hammer = ((df["open"] > df["close"]) & ((df["open"] - df["low"]) / range_ > 0.6)).astype(int)
+            engulf_up = ((df["close"] > df["open"]) & (df["close"].shift(1) < df["open"].shift(1)) & (df["close"] >= df["open"].shift(1)) & (df["open"] <= df["close"].shift(1))).astype(int)
+            df["doji_ratio_20"] = doji.rolling(20, min_periods=5).mean()
+            df["hammer_cnt_20"] = hammer.rolling(20, min_periods=5).sum()
+            df["engulfing_up_cnt_20"] = engulf_up.rolling(20, min_periods=5).sum()
+
+        # === H. 量价失衡 ===
+        if enabled["pv_imbalance"]:
+            df["mfi"] = money_flow_index(df, high_col=high_col, low_col=low_col, close_col=close_col, volume_col=vol_col)
+            df["cmf"] = chaikin_money_flow(df, high_col=high_col, low_col=low_col, close_col=close_col, volume_col=vol_col)
+            df["price_volume_corr_20"] = price_volume_corr(df, window=20, close_col=close_col, volume_col=vol_col)
+
+        # === I. 级差 / 横截面 ===
+        if enabled["cross_section"]:
+            df["ma200"] = calculate_ma(df, 200, column=close_col)
+            df["price_position_ma200"] = (df[close_col] / (df["ma200"].replace(0, np.nan)) - 1.0)
+            # beta_btc_60d：按当前周期使用等效60天窗口（1h=1440, 4h=360, 1d=60）与 BTC 的滚动 β（shift(1) 防泄露）
+            if btc_r_map is not None and len(df) > 0:
+                try:
+                    df["log_close"] = np.log(df[close_col].replace(0, np.nan))
+                    df["r_sym"] = df["log_close"].diff()
+                    df["r_btc"] = pd.Series(df["datetime"]).map(pd.Series(btc_r_map))
+                    bars_map = {"1h": 24*60, "4h": 6*60, "1d": 60}
+                    roll = bars_map.get(timeframe, 60)
+                    minp = max(roll // 2, 30)
+                    m_rs = df["r_sym"].rolling(roll, min_periods=minp).mean()
+                    m_rb = df["r_btc"].rolling(roll, min_periods=minp).mean()
+                    cov = (df["r_sym"] * df["r_btc"]).rolling(roll, min_periods=minp).mean() - m_rs * m_rb
+                    varb = (df["r_btc"] * df["r_btc"]).rolling(roll, min_periods=minp).mean() - (m_rb * m_rb)
+                    df["beta_btc_60d"] = (cov / (varb.replace(0, np.nan))).shift(1)
+                except Exception:
+                    df["beta_btc_60d"] = np.nan
+
+        # === J. Pivot & Volume Profile (HVN/LVN) ===
+        if enabled["pivot_hvn"]:
+            df["pivot_point"] = pivot_point(df, high_col=high_col, low_col=low_col, close_col=close_col)
+            df["distance_to_pivot"] = (df[close_col] - df["pivot_point"]) / (df[close_col].abs() + 1e-9)
+            # volume_profile_hvn/lvn：等效60天滚动成交量-价格直方图的高/低成交量节点（shift(1)）
+            if len(df) > 0:
+                try:
+                    n = len(df)
+                    hvn_vals = np.full(n, np.nan, dtype=float)
+                    lvn_vals = np.full(n, np.nan, dtype=float)
+                    bars_map = {"1h": 24*60, "4h": 6*60, "1d": 60}
+                    bins_map = {"1h": 50, "4h": 40, "1d": 20}
+                    roll = bars_map.get(timeframe, 60)
+                    bins = bins_map.get(timeframe, 20)
+                    minp = max(roll // 2, 30)
+                    prices = df[close_col].to_numpy()
+                    vols = df[vol_col].to_numpy()
+                    for i in range(n):
+                        start = max(0, i - roll + 1)
+                        win_p = prices[start:i+1]
+                        win_v = vols[start:i+1]
+                        if len(win_p) < minp:
+                            continue
+                        lo = float(np.nanmin(win_p)); hi = float(np.nanmax(win_p))
+                        if not np.isfinite(lo) or not np.isfinite(hi) or hi <= lo:
+                            continue
+                        hist, edges = np.histogram(win_p, bins=bins, range=(lo, hi), weights=win_v)
+                        centers = (edges[:-1] + edges[1:]) / 2.0
+                        if hist.size == 0:
+                            continue
+                        hvn_idx = int(np.nanargmax(hist))
+                        hvn_center = float(centers[hvn_idx]) if np.isfinite(centers[hvn_idx]) else np.nan
+                        pos_mask = hist > 0
+                        if pos_mask.any():
+                            # 在权重大于 0 的箱中选择最小者作为 LVN
+                            masked = np.where(pos_mask, hist, np.nan)
+                            lvn_idx = int(np.nanargmin(masked))
+                            lvn_center = float(centers[lvn_idx]) if np.isfinite(centers[lvn_idx]) else np.nan
+                        else:
+                            lvn_center = np.nan
+                        hvn_vals[i] = hvn_center
+                        lvn_vals[i] = lvn_center
+                    df["volume_profile_hvn"] = pd.Series(hvn_vals).shift(1)
+                    df["volume_profile_lvn"] = pd.Series(lvn_vals).shift(1)
+                except Exception:
+                    df["volume_profile_hvn"] = np.nan
+                    df["volume_profile_lvn"] = np.nan
+
+        # === K. 时间特征（known_future） ===
+        if enabled["time_features"] and "datetime" in df.columns:
+            dt = pd.to_datetime(df["datetime"])
+            hour = dt.dt.hour
+            dow = dt.dt.dayofweek
+            df["hour_sin"] = np.sin(2 * np.pi * hour / 24.0)
+            df["hour_cos"] = np.cos(2 * np.pi * hour / 24.0)
+            df["dow_sin"] = np.sin(2 * np.pi * dow / 7.0)
+            df["dow_cos"] = np.cos(2 * np.pi * dow / 7.0)
+
+        # === shift(1)：对重点新增列避免泄露 ===
+        shift_cols = [
+            # Regime flags
+            "trend_flag","range_flag","high_vol_flag","stress_flag",
+            # Channels & squeeze
+            "squeeze_on",
+            # Momentum/oscillator
+            "ppo","stoch_rsi","williams_r","tsi",
+            # Turning/patterns
+            "psar","psar_flip_flag","supertrend_10_3","heikin_ashi_trend",
+            # Tail & risk
+            "ret_skew_30d","ret_kurt_30d","var_95_30d","cvar_95_30d","z_score_gap",
+            # PV imbalance & cross-section
+            "mfi","cmf","price_volume_corr_20","price_position_ma200","beta_btc_60d",
+            # Pivot & time
+            "pivot_point","distance_to_pivot","volume_profile_hvn","volume_profile_lvn","hour_sin","hour_cos","dow_sin","dow_cos",
+        ]
+        for c in shift_cols:
+            if c in df.columns:
+                df[c] = df[c].shift(1)
+
+        # === ★ 派生：diff 与 slope_24h ===
+        starred = [
+            "trend_flag","range_flag",
+            "ppo","stoch_rsi",
+            "psar",
+            "ret_skew_30d","ret_kurt_30d",
+            "mfi",
+            "price_position_ma200",
+        ]
+        slope_win = {"1h": 24, "4h": 6, "1d": 2}.get(timeframe, 24)
+        for col in starred:
+            if col in df.columns:
+                try:
+                    df[f"{col}_diff1"] = df[col].diff()
+                    df[f"{col}_slope_{'24h'}"] = df[col].rolling(slope_win, min_periods=max(2, slope_win//2)).apply(linear_slope, raw=True)
+                except Exception:
+                    pass
 
         # === 交易信号 ===
         if enabled["signal_macd_cross"] and "macd_hist" in df.columns:
@@ -179,6 +427,18 @@ def indicating_main(timeframe="1h"):
                 "vwap",
                 # ✅ 新增：OBV 衍生
                 "obv_diff1","obv_pct","obv_slope_14",
+                # === 新增扩展目标（★ 推荐派生） ===
+                "trend_flag","range_flag","high_vol_flag","stress_flag",
+                "donchian_high_20","donchian_low_20","keltner_upper_20","keltner_lower_20","squeeze_on",
+                "ppo","stoch_rsi","williams_r","tsi",
+                "ichimoku_conv","ichimoku_base","ichimoku_span_a","ichimoku_span_b","cloud_thickness",
+                "psar","psar_flip_flag","supertrend_10_3","heikin_ashi_trend",
+                "ret_skew_30d","ret_kurt_30d","var_95_30d","cvar_95_30d","z_score_gap",
+                "engulfing_up_cnt_20","doji_ratio_20","hammer_cnt_20",
+                "mfi","cmf","price_volume_corr_20",
+                "price_position_ma200","beta_btc_60d","pivot_point","distance_to_pivot",
+                "volume_profile_hvn","volume_profile_lvn",
+                "hour_sin","hour_cos","dow_sin","dow_cos",
             ]
             exist_cols = [c for c in norm_targets if c in df.columns]
             if exist_cols:

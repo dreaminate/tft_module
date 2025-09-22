@@ -155,8 +155,9 @@ def _eval_subset(
                     est = RandomForestRegressor(n_estimators=200, n_jobs=-1, random_state=42)
             est.fit(Xtr, ytr); pred = est.predict(Xva)
             try:
-                rmse = float(mean_squared_error(yva, pred, squared=False))
-            except TypeError:
+                from sklearn.metrics import root_mean_squared_error as _rmse  # type: ignore
+                rmse = float(_rmse(yva, pred))
+            except Exception:
                 rmse = float(np.sqrt(mean_squared_error(yva, pred)))
             sc = -rmse
             reg_scores.append(sc)
@@ -191,58 +192,34 @@ def rfe_search(
         cols = [c for c in keep if c in train_df.columns]
         Xtr = safe_numeric_copy(train_df[cols]).fillna(0).replace([np.inf, -np.inf], 0)
         ytr = train_df[targets[0]].fillna(0).astype(float)
+        # 近似器优先选择 LightGBM，其次 CatBoost，再次 XGBoost，最后 RF
         try:
-            # prefer XGBRegressor GPU for speed
             try:
-                import xgboost as xgb  # type: ignore
-                try:
-                    est = xgb.XGBRegressor(
-                        n_estimators=200,
-                        max_depth=0,
-                        subsample=1.0,
-                        colsample_bytree=1.0,
-                        random_state=0,
-                        n_jobs=-1,
-                        tree_method="hist",
-                        predictor="auto",
-                        device="cuda",
-                        verbosity=0,
-                        eval_metric="rmse",
-                    )
-                except TypeError:
-                    est = xgb.XGBRegressor(
-                        n_estimators=200,
-                        max_depth=0,
-                        subsample=1.0,
-                        colsample_bytree=1.0,
-                        random_state=0,
-                        n_jobs=-1,
-                        tree_method="gpu_hist",
-                        predictor="gpu_predictor",
-                        verbosity=0,
-                        eval_metric="rmse",
-                    )
+                import lightgbm as lgb  # type: ignore
+                est = lgb.LGBMRegressor(n_estimators=400, learning_rate=0.05, subsample=0.8, colsample_bytree=0.8, random_state=0, n_jobs=-1)
+                est.fit(Xtr, ytr)
+                importances = getattr(est, "feature_importances_", None)
+                if importances is None:
+                    raise ValueError("no importances")
             except Exception:
                 try:
                     from catboost import CatBoostRegressor  # type: ignore
-                    est = CatBoostRegressor(
-                        iterations=200,
-                        depth=6,
-                        random_seed=0,
-                        task_type="GPU",
-                        verbose=False,
-                    )
-                except Exception:
-                    from sklearn.ensemble import RandomForestRegressor as _RF
-                    est = _RF(n_estimators=200, n_jobs=-1, random_state=0)
-            est.fit(Xtr, ytr)
-            try:
-                importances = est.feature_importances_
-            except Exception:
-                try:
+                    est = CatBoostRegressor(iterations=300, depth=6, random_seed=0, task_type="GPU", verbose=False)
+                    est.fit(Xtr, ytr)
                     importances = est.get_feature_importance()
                 except Exception:
-                    importances = np.ones(len(cols)) / len(cols)
+                    try:
+                        import xgboost as xgb  # type: ignore
+                        est = xgb.XGBRegressor(n_estimators=300, max_depth=0, subsample=0.9, colsample_bytree=0.9, random_state=0, n_jobs=-1, tree_method="hist", predictor="auto", device="cuda", verbosity=0, eval_metric="rmse")
+                        est.fit(Xtr, ytr)
+                        importances = getattr(est, "feature_importances_", None)
+                        if importances is None:
+                            raise ValueError("no importances")
+                    except Exception:
+                        from sklearn.ensemble import RandomForestRegressor as _RF
+                        est = _RF(n_estimators=300, n_jobs=-1, random_state=0)
+                        est.fit(Xtr, ytr)
+                        importances = getattr(est, "feature_importances_", np.ones(len(cols)) / len(cols))
         except Exception:
             importances = np.ones(len(cols)) / len(cols)
         order = np.argsort(importances)
@@ -277,8 +254,9 @@ def ga_search(
     sample_cap: int | None = 50000,
     multi_objective: bool = False,
     mo_weights: Optional[Dict[str, float]] = None,
+    seed: int = 42,
 ) -> Tuple[List[str], float, Dict[str, float]]:
-    rnd = random.Random(42); n = len(pool)
+    rnd = random.Random(int(seed)); n = len(pool)
     mo_weights = mo_weights or {"classification": 1.0, "regression": 1.0}
 
     def random_individual() -> List[int]:
@@ -350,6 +328,50 @@ def ga_search(
     final_feats = decode(best_ind)
     final_score, details = fitness(best_ind)
     return final_feats, final_score, details
+
+
+def ga_search_multi(
+    pool: List[str],
+    train_df: pd.DataFrame,
+    val_df: pd.DataFrame,
+    targets: List[str],
+    weights_yaml: str,
+    seeds: List[int],
+    pop_size: int = 30,
+    generations: int = 15,
+    cx_prob: float = 0.7,
+    mut_prob: float = 0.1,
+    sample_cap: int | None = 50000,
+    multi_objective: bool = False,
+    mo_weights: Optional[Dict[str, float]] = None,
+) -> Tuple[List[str], float, Dict[str, float], Dict[str, float]]:
+    best_feats: List[str] = []
+    best_score: float = -1e9
+    best_detail: Dict[str, float] = {}
+    locus_freq: Dict[str, int] = {}
+    for sd in seeds:
+        feats, score, det = ga_search(
+            pool,
+            train_df,
+            val_df,
+            targets,
+            weights_yaml,
+            pop_size=pop_size,
+            generations=generations,
+            cx_prob=cx_prob,
+            mut_prob=mut_prob,
+            sample_cap=sample_cap,
+            multi_objective=multi_objective,
+            mo_weights=mo_weights,
+            seed=int(sd),
+        )
+        for f in feats:
+            locus_freq[f] = locus_freq.get(f, 0) + 1
+        if score > best_score:
+            best_feats, best_score, best_detail = feats, score, det
+    total = float(max(1, len(seeds)))
+    freq_pct = {k: float(v) / total for k, v in locus_freq.items()}
+    return best_feats, best_score, best_detail, freq_pct
 
 
 def main():

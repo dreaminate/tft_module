@@ -35,6 +35,21 @@ DEFAULTS = {
     "volume_pct_window": 120,
     "volume_spike_thresh": 1.5,
     "distance_thresh": 0.02,
+    "donchian_window": 20,
+    "keltner_period": 20,
+    "keltner_mult": 1.5,
+    "ppo_short": 12,
+    "ppo_long": 26,
+    "mfi_period": 14,
+    "cmf_period": 20,
+    "williams_r_period": 14,
+    "tsi_long": 25,
+    "tsi_short": 13,
+    "ichimoku_conv": 9,
+    "ichimoku_base": 26,
+    "ichimoku_span_b": 52,
+    "supertrend_period": 10,
+    "supertrend_mult": 3.0,
 }
 
 # =========================
@@ -156,6 +171,159 @@ def calculate_vwap(df, period=None, column_price="close", column_volume="volume"
     pv = (tp * df[column_volume]).rolling(window=period, min_periods=1).sum()
     v = df[column_volume].rolling(window=period, min_periods=1).sum()
     return _safe(pv / v)
+
+
+# =========================
+# 高阶指标扩展
+# =========================
+def donchian_channel(df: pd.DataFrame, window: int = DEFAULTS["donchian_window"], high_col: str = "high", low_col: str = "low") -> tuple[pd.Series, pd.Series]:
+    up = _safe(df[high_col].rolling(window, min_periods=1).max())
+    low = _safe(df[low_col].rolling(window, min_periods=1).min())
+    return up, low
+
+
+def keltner_channel(
+    df: pd.DataFrame,
+    period: int = DEFAULTS["keltner_period"],
+    multiplier: float = DEFAULTS["keltner_mult"],
+    price_col: str = "close",
+    high_col: str = "high",
+    low_col: str = "low",
+) -> tuple[pd.Series, pd.Series, pd.Series]:
+    ema = _safe(df[price_col].ewm(span=period, adjust=False).mean())
+    atr = calculate_atr(df, period=period, high_col=high_col, low_col=low_col, close_col=price_col)
+    upper = _safe(ema + multiplier * atr)
+    lower = _safe(ema - multiplier * atr)
+    return ema, upper, lower
+
+
+def calculate_ppo(df: pd.DataFrame, short: int = DEFAULTS["ppo_short"], long: int = DEFAULTS["ppo_long"], column: str = "close") -> pd.Series:
+    ema_s = df[column].ewm(span=short, adjust=False).mean()
+    ema_l = df[column].ewm(span=long, adjust=False).mean()
+    ppo = (ema_s - ema_l) / (ema_l.replace(0, np.nan) + 1e-10)
+    return _safe(ppo)
+
+
+def stoch_rsi(df: pd.DataFrame, period: int = DEFAULTS["rsi_period"], column: str = "close") -> pd.Series:
+    rsi = calculate_rsi(df, period=period, column=column)
+    lowest = rsi.rolling(period, min_periods=1).min()
+    highest = rsi.rolling(period, min_periods=1).max()
+    return _safe((rsi - lowest) / (highest - lowest + 1e-10))
+
+
+def williams_r(df: pd.DataFrame, period: int = DEFAULTS["williams_r_period"], high_col: str = "high", low_col: str = "low", close_col: str = "close") -> pd.Series:
+    hh = df[high_col].rolling(period, min_periods=1).max()
+    ll = df[low_col].rolling(period, min_periods=1).min()
+    wr = -100.0 * (hh - df[close_col]) / (hh - ll + 1e-10)
+    return _safe(wr)
+
+
+def tsi(df: pd.DataFrame, long: int = DEFAULTS["tsi_long"], short: int = DEFAULTS["tsi_short"], column: str = "close") -> pd.Series:
+    m = df[column].diff()
+    m_ema1 = m.ewm(span=long, adjust=False).mean()
+    m_ema2 = m_ema1.ewm(span=short, adjust=False).mean()
+    am = m.abs()
+    am_ema1 = am.ewm(span=long, adjust=False).mean()
+    am_ema2 = am_ema1.ewm(span=short, adjust=False).mean()
+    return _safe(m_ema2 / (am_ema2 + 1e-10))
+
+
+def ichimoku(df: pd.DataFrame, conv: int = DEFAULTS["ichimoku_conv"], base: int = DEFAULTS["ichimoku_base"], span_b: int = DEFAULTS["ichimoku_span_b"], high_col: str = "high", low_col: str = "low") -> tuple[pd.Series, pd.Series, pd.Series, pd.Series]:
+    conv_line = _safe((df[high_col].rolling(conv, min_periods=1).max() + df[low_col].rolling(conv, min_periods=1).min()) / 2.0)
+    base_line = _safe((df[high_col].rolling(base, min_periods=1).max() + df[low_col].rolling(base, min_periods=1).min()) / 2.0)
+    span_a = _safe(((conv_line + base_line) / 2.0).shift(base))
+    span_b_line = _safe(((df[high_col].rolling(span_b, min_periods=1).max() + df[low_col].rolling(span_b, min_periods=1).min()) / 2.0).shift(base))
+    return conv_line, base_line, span_a, span_b_line
+
+
+def psar(df: pd.DataFrame, step: float = 0.02, max_step: float = 0.2, high_col: str = "high", low_col: str = "low") -> tuple[pd.Series, pd.Series]:
+    high = df[high_col].to_numpy()
+    low = df[low_col].to_numpy()
+    n = len(df)
+    psar = np.zeros(n, dtype=float)
+    bull = True
+    af = step
+    ep = low[0]
+    hp = high[0]
+    lp = low[0]
+    for i in range(1, n):
+        prev = psar[i-1]
+        if bull:
+            psar[i] = prev + af * (hp - prev)
+            psar[i] = min(psar[i], low[i-1], low[i-2] if i > 1 else low[i-1])
+            if high[i] > hp:
+                hp = high[i]
+                af = min(max_step, af + step)
+            if low[i] < psar[i]:
+                bull = False
+                psar[i] = hp
+                lp = low[i]
+                af = step
+        else:
+            psar[i] = prev + af * (lp - prev)
+            psar[i] = max(psar[i], high[i-1], high[i-2] if i > 1 else high[i-1])
+            if low[i] < lp:
+                lp = low[i]
+                af = min(max_step, af + step)
+            if high[i] > psar[i]:
+                bull = True
+                psar[i] = lp
+                hp = high[i]
+                af = step
+    psar_series = _safe(pd.Series(psar, index=df.index))
+    flip = (psar_series.shift(1) > df[high_col]) & (psar_series <= df[low_col]) | (psar_series.shift(1) < df[low_col]) & (psar_series >= df[high_col])
+    return psar_series, _safe(flip.astype(int))
+
+
+def supertrend(df: pd.DataFrame, period: int = DEFAULTS["supertrend_period"], multiplier: float = DEFAULTS["supertrend_mult"], high_col: str = "high", low_col: str = "low", close_col: str = "close") -> pd.Series:
+    atr = calculate_atr(df, period=period, high_col=high_col, low_col=low_col, close_col=close_col)
+    hl2 = (df[high_col] + df[low_col]) / 2.0
+    upper = hl2 + multiplier * atr
+    lower = hl2 - multiplier * atr
+    st = np.zeros(len(df), dtype=float)
+    up_trend = True
+    for i in range(1, len(df)):
+        if df[close_col].iloc[i] > upper.iloc[i-1]:
+            up_trend = True
+        elif df[close_col].iloc[i] < lower.iloc[i-1]:
+            up_trend = False
+        st[i] = lower.iloc[i] if up_trend else upper.iloc[i]
+    return _safe(pd.Series(st, index=df.index))
+
+
+def heikin_ashi_trend(df: pd.DataFrame) -> pd.Series:
+    close = df[["open", "high", "low", "close"]].mean(axis=1)
+    open_ha = (df["open"].shift(1) + df["close"].shift(1)) / 2.0
+    open_ha = open_ha.fillna(df["open"]) 
+    return _safe(close - open_ha)
+
+
+def money_flow_index(df: pd.DataFrame, period: int = DEFAULTS["mfi_period"], high_col: str = "high", low_col: str = "low", close_col: str = "close", volume_col: str = "volume") -> pd.Series:
+    tp = (df[high_col] + df[low_col] + df[close_col]) / 3.0
+    mf = tp * df[volume_col]
+    pos_mf = np.where(tp > tp.shift(1), mf, 0.0)
+    neg_mf = np.where(tp < tp.shift(1), mf, 0.0)
+    pos_sum = pd.Series(pos_mf, index=df.index).rolling(period, min_periods=1).sum()
+    neg_sum = pd.Series(neg_mf, index=df.index).rolling(period, min_periods=1).sum()
+    mr = pos_sum / (neg_sum + 1e-10)
+    mfi = 100.0 - (100.0 / (1.0 + mr))
+    return _safe(mfi)
+
+
+def chaikin_money_flow(df: pd.DataFrame, period: int = DEFAULTS["cmf_period"], high_col: str = "high", low_col: str = "low", close_col: str = "close", volume_col: str = "volume") -> pd.Series:
+    mfm = ((df[close_col] - df[low_col]) - (df[high_col] - df[close_col])) / ((df[high_col] - df[low_col]).replace(0, np.nan) + 1e-10)
+    mfv = mfm * df[volume_col]
+    return _safe(mfv.rolling(period, min_periods=1).sum() / (df[volume_col].rolling(period, min_periods=1).sum() + 1e-10))
+
+
+def price_volume_corr(df: pd.DataFrame, window: int = 20, close_col: str = "close", volume_col: str = "volume") -> pd.Series:
+    r = np.log(df[close_col].replace(0, np.nan)).diff()
+    dv = df[volume_col].pct_change().replace([np.inf, -np.inf], np.nan)
+    return _safe(r.rolling(window, min_periods=2).corr(dv))
+
+
+def pivot_point(df: pd.DataFrame, high_col: str = "high", low_col: str = "low", close_col: str = "close") -> pd.Series:
+    return _safe((df[high_col] + df[low_col] + df[close_col]) / 3.0)
 
 
 # =========================

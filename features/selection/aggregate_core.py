@@ -85,6 +85,7 @@ def build_unified_core(
     tft_file: str | None = None,
     topk_per_pair: int | None = None,
     min_appear_rate: float | None = None,
+    min_appear_rate_era: float | None = None,
 ) -> pd.DataFrame:
     if pair_df.empty:
         return pd.DataFrame(columns=["feature", "score_global", "appear_rate", "rank", "keep"])
@@ -145,10 +146,52 @@ def build_unified_core(
     else:
         agg["appear_rate"] = np.nan
 
+    # era 出现率（如存在列 'era'）
+    if "era" in df.columns:
+        era_pairs = df[["feature", "period", "target", "era"]].drop_duplicates()
+        n_eras = max(1, int(era_pairs["era"].nunique()))
+        era_counts = era_pairs.groupby("feature")["era"].nunique().rename("era_count").reset_index()
+        era_counts["appear_rate_era"] = era_counts["era_count"].astype(float) / float(n_eras)
+        agg = agg.merge(era_counts[["feature", "appear_rate_era"]], on="feature", how="left")
+        agg["appear_rate_era"] = agg["appear_rate_era"].fillna(0.0)
+        if isinstance(min_appear_rate_era, (int, float)) and 0 <= float(min_appear_rate_era) <= 1:
+            agg = agg[agg["appear_rate_era"] >= float(min_appear_rate_era)].copy()
+    else:
+        agg["appear_rate_era"] = np.nan
+
     agg = agg.sort_values("score_global", ascending=False).reset_index(drop=True)
     agg["rank"] = np.arange(1, len(agg) + 1)
     agg["keep"] = agg["rank"] <= int(topk)
     return agg
+
+
+def export_core_and_boost(
+    core_df: pd.DataFrame,
+    pair_df: pd.DataFrame,
+    out_core_yaml: str = "features_core.yaml",
+    out_boost_yaml: str = "features_boost.yaml",
+    boost_prefixes: Optional[List[str]] = None,
+    boost_limit_per_pair: int = 12,
+) -> None:
+    import yaml
+    os.makedirs(os.path.dirname(out_core_yaml) or ".", exist_ok=True)
+    os.makedirs(os.path.dirname(out_boost_yaml) or ".", exist_ok=True)
+    core_keep = core_df[core_df["keep"]]["feature"].astype(str).tolist()
+    with open(out_core_yaml, "w", encoding="utf-8") as f:
+        yaml.safe_dump({"core": core_keep}, f, allow_unicode=True, sort_keys=False)
+
+    # boost: per (period,target) take top-M among prefixed features not already in core
+    boost_prefixes = boost_prefixes or ["onchain_", "funding_", "oi_", "basis_", "etf_"]
+    pref = tuple(boost_prefixes)
+    work = pair_df.copy()
+    work = work[~work["feature"].isin(core_keep)].copy()
+    work = work[work["feature"].astype(str).str.startswith(pref)]
+    boost_map: Dict[str, List[str]] = {}
+    for (per, tgt), g in work.groupby(["period", "target"], sort=False):
+        sub = g.sort_values("score_local", ascending=False).head(int(boost_limit_per_pair))
+        boost_map[f"{per}:{tgt}"] = sub["feature"].astype(str).tolist()
+    with open(out_boost_yaml, "w", encoding="utf-8") as f:
+        yaml.safe_dump({"boost": boost_map}, f, allow_unicode=True, sort_keys=False)
 
 
 def export_selected_features(df: pd.DataFrame, out_txt: str) -> None:
