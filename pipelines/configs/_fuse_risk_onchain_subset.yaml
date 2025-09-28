@@ -1,0 +1,170 @@
+base_csv: data/merged/full_merged.csv
+out_csv: data/merged/full_merged_with_fundamentals.csv
+slim_csv: data/merged/full_merged_slim.csv
+cols_txt: data/merged/fundamental_columns.txt
+report_dir: data/merged/fuse_audit
+validate: true
+dataset_type: combined
+no_nan_policy:
+  enabled: false
+  scope: onchain
+  method: intersect
+  columns: []
+max_missing_ratio: 0.01
+extra_field:
+  append_to_filename: both
+  group_to_folder: true
+  folder_mode: both
+  folder_root: data/merged/expert_group
+post_convert:
+  pkl: true
+  parquet: false
+  periods:
+  - 1h
+  - 4h
+  - 1d
+experts:
+- name: Risk-Prob-TFT_base
+  dataset_type: fundamentals_only
+  no_nan_policy:
+    enabled: false
+  include_symbol:
+    funding_oi: true
+    funding_vol: false
+    oi: true
+    ls_global: true
+    ls_top_acc: true
+    ls_top_pos: true
+    basis: true
+    whale: true
+    taker: true
+    cgdi: false
+    cdri: false
+    borrow_interest: false
+  include_global: {}
+- name: Risk-Prob-TFT_rich
+  dataset_type: combined
+  no_nan_policy:
+    enabled: true
+    scope: onchain
+    method: intersect
+  include_symbol:
+    funding_oi: true
+    funding_vol: true
+    oi: true
+    ls_global: true
+    ls_top_acc: true
+    ls_top_pos: true
+    basis: true
+    whale: true
+    taker: true
+    cgdi: false
+    cdri: false
+    borrow_interest: false
+  include_global:
+    active_addresses: true
+    new_addresses: true
+    stablecoin_mcap: true
+    exch_netflow: true
+    premium: true
+    etf_btc: true
+    etf_eth: true
+- name: Risk-Reg-TFT_base
+  dataset_type: fundamentals_only
+  no_nan_policy:
+    enabled: false
+  include_symbol:
+    funding_oi: true
+    funding_vol: false
+    oi: true
+    ls_global: true
+    ls_top_acc: true
+    ls_top_pos: true
+    basis: true
+    whale: true
+    taker: true
+    cgdi: false
+    cdri: false
+    borrow_interest: false
+  include_global: {}
+- name: Risk-Reg-TFT_rich
+  dataset_type: combined
+  no_nan_policy:
+    enabled: true
+    scope: onchain
+    method: intersect
+  include_symbol:
+    funding_oi: true
+    funding_vol: true
+    oi: true
+    ls_global: true
+    ls_top_acc: true
+    ls_top_pos: true
+    basis: true
+    whale: true
+    taker: true
+    cgdi: false
+    cdri: false
+    borrow_interest: false
+  include_global:
+    active_addresses: true
+    new_addresses: true
+    stablecoin_mcap: true
+    exch_netflow: true
+    premium: true
+    etf_btc: true
+    etf_eth: true
+- name: OnChain-ETF-TFT_base
+  dataset_type: combined
+  no_nan_policy:
+    enabled: true
+    scope: onchain
+    method: intersect
+  include_symbol:
+    funding_oi: true
+    funding_vol: true
+    oi: true
+    ls_global: true
+    ls_top_acc: true
+    ls_top_pos: true
+    basis: true
+    whale: true
+    taker: true
+    cgdi: true
+    cdri: true
+    borrow_interest: true
+  include_global:
+    active_addresses: true
+    new_addresses: true
+    stablecoin_mcap: true
+    exch_netflow: true
+    premium: true
+    etf_btc: true
+    etf_eth: true
+- name: OnChain-ETF-TFT_rich
+  dataset_type: combined
+  no_nan_policy:
+    enabled: true
+    scope: onchain
+    method: intersect
+  include_symbol:
+    funding_oi: true
+    funding_vol: true
+    oi: true
+    ls_global: true
+    ls_top_acc: true
+    ls_top_pos: true
+    basis: true
+    whale: true
+    taker: true
+    cgdi: true
+    cdri: true
+    borrow_interest: true
+  include_global:
+    active_addresses: true
+    new_addresses: true
+    stablecoin_mcap: true
+    exch_netflow: true
+    premium: true
+    etf_btc: true
+    etf_eth: true

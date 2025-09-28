@@ -8,9 +8,9 @@ from scipy.stats import skew
 from sklearn.neighbors import LocalOutlierFactor
 
 PERIOD_CONFIG: Dict[str, Dict] = {
-    "1h": {"rolling_window": 48, "ewma": True, "lof_neighbors": 96},
-    "4h": {"rolling_window": 48, "ewma": True, "lof_neighbors": 48},
-    "1d": {"rolling_window": 30, "ewma": True, "lof_neighbors": 30},
+    "1h": {"rolling_window": 48, "ewma": True, "lof_neighbors": 96, "annual_factor": (24*365) ** 0.5, "vj_W": 24, "vj_L": 96, "vj_tau": 1.6, "brk_N": 96, "brk_eps": 0.0015, "brk_vol": 1.2},
+    "4h": {"rolling_window": 48, "ewma": True, "lof_neighbors": 48,  "annual_factor": (6*365) ** 0.5,  "vj_W": 12, "vj_L": 48, "vj_tau": 1.5, "brk_N": 48,  "brk_eps": 0.0015, "brk_vol": 1.2},
+    "1d": {"rolling_window": 30, "ewma": True, "lof_neighbors": 30,  "annual_factor": (365) ** 0.5,     "vj_W": 7,  "vj_L": 30, "vj_tau": 1.4, "brk_N": 30,  "brk_eps": 0.001,  "brk_vol": 1.1},
 }
 
 def process_period_targets(df: pd.DataFrame, period: str, future_col: str, symbol_name: str | None = None) -> pd.DataFrame:
@@ -40,6 +40,11 @@ def process_period_targets(df: pd.DataFrame, period: str, future_col: str, symbo
         "target_breakout_count": True,
         "target_max_drawdown": True,
         "target_drawdown_prob": True,
+        # 新增 4 个缺失目标
+        "target_fundflow_strength": True,
+        "target_vol_jump_prob": True,
+        "target_realized_vol": True,
+        "target_breakout_prob": True,
     }
 
     df = df.copy()
@@ -146,6 +151,61 @@ def compute_targets(df: pd.DataFrame, period: str, future_col: str, flags: Dict[
     if flags["target_breakout_count"]:
         up_seq = df["logreturn"] > 0
         df["target_breakout_count"] = up_seq.groupby((~up_seq).cumsum()).cumsum()
+
+    # === 新增目标：fundflow_strength（回归） ===
+    if flags.get("target_fundflow_strength", False):
+        # 需要以下列（已在融合阶段 shift/ffill，并可能做过标准化）：
+        # exch_netflow(卖压取负)、stablecoin_mcap(增量)、etf_flow、cb_premium
+        w_ex, w_st, w_etf, w_cb = 0.35, 0.25, 0.25, 0.15
+        ex = df.get("exch_netflow")
+        st = df.get("stablecoin_mcap")
+        et = df.get("etf_flow")
+        cb = df.get("cb_premium")
+        # 差分/标准化（鲁棒）：
+        def _z(x: pd.Series):
+            if x is None: return None
+            xm = x.astype(float)
+            mu = xm.mean(); sd = xm.std(ddof=0)
+            sd = sd if sd and sd > 1e-6 else 1.0
+            return (xm - mu) / sd
+        ex_z = -_z(ex) if ex is not None else 0.0   # 净流出为正卖压 → 取负
+        st_d = st.diff() if st is not None else None
+        st_z = _z(st_d) if st_d is not None else 0.0
+        et_z = _z(et) if et is not None else 0.0
+        cb_z = _z(cb) if cb is not None else 0.0
+        df["target_fundflow_strength"] = (
+            w_ex * (ex_z if isinstance(ex_z, pd.Series) else 0.0) +
+            w_st * (st_z if isinstance(st_z, pd.Series) else 0.0) +
+            w_etf * (et_z if isinstance(et_z, pd.Series) else 0.0) +
+            w_cb * (cb_z if isinstance(cb_z, pd.Series) else 0.0)
+        )
+
+    # === 新增目标：vol_jump_prob（分类） ===
+    if flags.get("target_vol_jump_prob", False):
+        W = PERIOD_CONFIG[period]["vj_W"]; L = PERIOD_CONFIG[period]["vj_L"]; tau = PERIOD_CONFIG[period]["vj_tau"]
+        hist_vol = df["rolling_volatility"].rolling(L).mean()
+        fut = df["logreturn"].shift(-1).rolling(W).std()
+        ratio = (fut / (hist_vol + 1e-6)).fillna(0.0)
+        df["target_vol_jump_prob"] = (ratio >= tau).astype(int)
+
+    # === 新增目标：realized_vol（回归） ===
+    if flags.get("target_realized_vol", False):
+        ann = PERIOD_CONFIG[period]["annual_factor"]
+        # 未来 W 窗的实现波动（年化）：
+        W = PERIOD_CONFIG[period]["vj_W"]
+        rv = df["logreturn"].shift(-1).rolling(W).apply(lambda x: float(np.sqrt(np.sum(np.square(x.astype(float))) + 1e-12)), raw=False)
+        df["target_realized_vol"] = rv * ann
+
+    # === 新增目标：breakout_prob（分类） ===
+    if flags.get("target_breakout_prob", False):
+        N = PERIOD_CONFIG[period]["brk_N"]; eps = PERIOD_CONFIG[period]["brk_eps"]; vthr = PERIOD_CONFIG[period]["brk_vol"]
+        # 简化口径：近 N 窗的局部高低 + 量能确认
+        hi = df["high"].rolling(N, min_periods=2).max(); lo = df["low"].rolling(N, min_periods=2).min()
+        vol = df.get("volume", pd.Series(np.nan, index=df.index)).astype(float)
+        v_mean = vol.rolling(max(2, N//4)).mean(); v_ok = (vol / (v_mean + 1e-6)) >= vthr
+        up_brk = (df["close"].shift(-1) >= (hi * (1.0 + eps))) & v_ok
+        dn_brk = (df["close"].shift(-1) <= (lo * (1.0 - eps))) & v_ok
+        df["target_breakout_prob"] = (up_brk | dn_brk).astype(int)
 
     # 清理临时列
     df.drop(columns=["logreturn", "binary_trend"], inplace=True, errors="ignore")

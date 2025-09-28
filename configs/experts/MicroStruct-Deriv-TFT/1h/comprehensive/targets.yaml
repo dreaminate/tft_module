@@ -1,0 +1,25 @@
+model_type: tft
+targets:
+- target_binarytrend
+weights:
+  by_target:
+    target_binarytrend: 1.2
+output_head:
+  type: per_symbol_affine
+  apply_on: logits
+  init:
+    scale: 1.0
+    bias: 0.0
+  regularization:
+    l2_scale_from_one: 0.0001
+    l2_bias: 0.0001
+  clamp_scale:
+    min: 0.5
+    max: 1.5
+symbol_weights:
+  default: 1.0
+  BTC_USDT: 1.0
+  ETH_USDT: 1.0
+  BNB_USDT: 1.0
+  SOL_USDT: 1.0
+  ADA_USDT: 1.0

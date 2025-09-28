@@ -214,7 +214,27 @@ def main():
         # 注入 pinned（根据 expert_name/channel 使用解析后的列表）
         pinned_list = None
         if args.expert_name in resolved_map:
-            pinned_list = resolved_map[args.expert_name].get(args.channel, [])
+            # rich 通道的 pinned = base ∪ rich（union）
+            base_pins = resolved_map[args.expert_name].get("base", [])
+            ch_pins = resolved_map[args.expert_name].get(args.channel, [])
+            if str(args.channel).lower() == "rich":
+                pinned_list = list(dict.fromkeys(list(base_pins) + list(ch_pins)))
+            else:
+                pinned_list = ch_pins
+        # OnChain 专家：限制 allowlist 为链上/ETF 前缀（同时数据中保留 targets）
+        allowlist_override = None
+        try:
+            if str(args.expert_name).strip() == "OnChain-ETF-TFT":
+                df_all = pd.concat([ds.train, ds.val], ignore_index=True)
+                onchain_cols = [c for c in df_all.columns if str(c).startswith("onchain_") or str(c).startswith("etf_")]
+                out_dir = os.path.join("reports", "feature_evidence", str(args.expert_name), str(args.channel))
+                os.makedirs(out_dir, exist_ok=True)
+                allowlist_override = os.path.join(out_dir, "allowlist_onchain.txt")
+                with open(allowlist_override, "w", encoding="utf-8") as fh:
+                    for c in onchain_cols:
+                        fh.write(f"{c}\n")
+        except Exception:
+            allowlist_override = None
         params_dict = dict(args.__dict__)
         params = {}
         if params_dict:
@@ -229,7 +249,7 @@ def main():
             val_mode=args.val_mode,
             val_days=args.val_days,
             val_ratio=args.val_ratio,
-            allowlist_path=args.allowlist,
+            allowlist_path=allowlist_override or args.allowlist,
             params_dict={**filt_params},
         )
     if args.with_embedded:
@@ -240,11 +260,11 @@ def main():
             val_mode=args.val_mode,
             val_days=args.val_days,
             val_ratio=args.val_ratio,
-            allowlist_path=args.allowlist,
+            allowlist_path=allowlist_override or args.allowlist,
             targets_override=None,
             cfg={},
         )
-    run_tree_perm(periods, args.val_mode, args.val_days, args.val_ratio, args.preview, args.tree_out, allowlist_path=args.allowlist, pkl_path=args.pkl, time_perm=bool(args.time_perm), perm_method="cyclic_shift", block_len=int(args.block_len), group_cols=gcols, repeats=int(args.perm_repeats))
+    run_tree_perm(periods, args.val_mode, args.val_days, args.val_ratio, args.preview, args.tree_out, allowlist_path=(allowlist_override or args.allowlist), pkl_path=args.pkl, time_perm=bool(args.time_perm), perm_method="cyclic_shift", block_len=int(args.block_len), group_cols=gcols, repeats=int(args.perm_repeats))
     agg = aggregate_tree_perm(args.tree_out)
     core = build_unified_core(
         agg,
@@ -275,6 +295,20 @@ def main():
     except Exception:
         extra_cnt = 0
     print(f"[save] {args.out_allowlist} (core={len(core_keep)}, pinned_extra={extra_cnt}, total={len(union_feats)})")
+    # 额外：为该专家的每个叶子（period/channel）写入就近清单，训练时优先使用叶子目录下的 selected_features.txt
+    try:
+        expert_root = os.path.join("configs", "experts", str(args.expert_name))
+        for per in (periods or []):
+            leaf_dir = os.path.join(expert_root, str(per), str(args.channel))
+            cfg_path = os.path.join(leaf_dir, "model_config.yaml")
+            if os.path.isdir(leaf_dir) and os.path.exists(cfg_path):
+                out_leaf = os.path.join(leaf_dir, "selected_features.txt")
+                with open(out_leaf, "w", encoding="utf-8") as fh:
+                    for c in union_feats:
+                        fh.write(f"{c}\n")
+                print(f"[save] {out_leaf} (leaf-specific allowlist)")
+    except Exception as _e:
+        print(f"[warn] write leaf allowlist failed: {_e}")
     # export core/boost YAMLs
     boost_prefixes = [x.strip() for x in (args.boost_prefixes or "").split(",") if x.strip()]
     export_core_and_boost(core, agg, out_core_yaml=args.boost_out_core, out_boost_yaml=args.boost_out_yaml, boost_prefixes=boost_prefixes, boost_limit_per_pair=int(args.boost_limit_per_pair))

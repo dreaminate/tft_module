@@ -21,9 +21,9 @@ include_symbol:
   basis: true
   whale: true
   taker: true
-  cgdi: true
-  cdri: true
-  borrow_interest: true
+  cgdi: false
+  cdri: false
+  borrow_interest: false
 extra_field:
   name: baseline
   append_to_filename: none
@@ -54,5 +54,7 @@ experts_map:
   Regime-Gate_rich: configs/experts/Regime-Gate/datasets/rich.yaml
   RelativeStrength-Spread-TFT_base: configs/experts/RelativeStrength-Spread-TFT/datasets/base.yaml
   RelativeStrength-Spread-TFT_rich: configs/experts/RelativeStrength-Spread-TFT/datasets/rich.yaml
-  Risk-TFT_base: configs/experts/Risk-TFT/datasets/base.yaml
-  Risk-TFT_rich: configs/experts/Risk-TFT/datasets/rich.yaml
+  Risk-Prob-TFT_base: configs/experts/Risk-Prob-TFT/datasets/base.yaml
+  Risk-Prob-TFT_rich: configs/experts/Risk-Prob-TFT/datasets/rich.yaml
+  Risk-Reg-TFT_base: configs/experts/Risk-Reg-TFT/datasets/base.yaml
+  Risk-Reg-TFT_rich: configs/experts/Risk-Reg-TFT/datasets/rich.yaml

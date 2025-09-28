@@ -1,20 +1,21 @@
 dataset_type: fundamentals_only
 max_missing_ratio: 0.01
+feature_list_path: reports/feature_evidence/Alpha-Dir-TFT/base/selected_features.txt
 no_nan_policy:
   enabled: false
 include_symbol:
-  funding_oi: true
+  funding_oi: false
   funding_vol: false
-  oi: true
-  ls_global: true
-  ls_top_acc: true
-  ls_top_pos: true
-  basis: true
-  whale: true
-  taker: true
-  cgdi: true
-  cdri: true
-  borrow_interest: true
+  oi: false
+  ls_global: false
+  ls_top_acc: false
+  ls_top_pos: false
+  basis: false
+  whale: false
+  taker: false
+  cgdi: false
+  cdri: false
+  borrow_interest: false
 include_global: {}
 extra_field:
   name: Alpha-Dir-TFT
@@ -30,3 +31,36 @@ post_convert:
   - 1h
   - 4h
   - 1d
+
+pinned_features:
+  base:
+    - open
+    - high
+    - low
+    - close
+    - volume
+    - vwap
+    - rsi
+    - macd_hist
+    - adx
+    - adx_scaled
+    - boll_bandwidth
+    - ma5
+    - ma20
+    - obv
+    - atr
+    - cci
+    - momentum
+    - ppo
+    - stoch_rsi
+    - williams_r
+    - tsi
+    - donchian_high_20
+    - donchian_low_20
+    - keltner_upper_20
+    - keltner_lower_20
+    - squeeze_on
+    - trendline_slope_20
+    - ma_diff_5_20
+    - boll_pctb
+    - amplitude_range

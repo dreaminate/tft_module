@@ -1,4 +1,4 @@
-data_path: data/pkl_merged/full_merged.pkl
+data_path: data/pkl_merged/full_merged_rich.pkl
 expert: Alpha-Dir-TFT
 period: "4h"
 modality_set: rich

@@ -18,10 +18,11 @@ def read_pickle_compat(path):
         with open(path, "rb") as fh:
             return _NumpyCoreAliasUnpickler(fh).load()
 import numpy as np
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict
 from pytorch_forecasting import TimeSeriesDataSet
 from pytorch_forecasting.data import NaNLabelEncoder, MultiNormalizer, TorchNormalizer
 from torch.utils.data import DataLoader
+from utils.feature_utils import get_pinned_features
 
 
 def _robust_parse_datetime(df: pd.DataFrame) -> pd.DataFrame:
@@ -70,6 +71,8 @@ def get_dataloaders(
     periods: Optional[List[str]] = None,
     symbols: Optional[List[str]] = None,
     selected_features_path: Optional[str] = None,
+    pinned_features_cfg: Optional[Dict[str, List[str]]] = None,
+    modality: Optional[str] = None,
     **kwargs,
 ) -> Tuple[DataLoader, DataLoader, List[str], TimeSeriesDataSet, List[str], dict]:
     # 优先使用传入的 data_path；若不可用则回退到默认 pkl 路径
@@ -95,6 +98,24 @@ def get_dataloaders(
     df = df.sort_values(["symbol", "period", "datetime"]).copy()
     df["time_idx"] = df.groupby(["symbol", "period"]).cumcount()
     df["symbol"], df["period"] = df["symbol"].astype(str), df["period"].astype(str)
+
+    # --- 全局时间划分 ---
+    if val_mode == "days":
+        val_cutoff_date = df["datetime"].max() - pd.Timedelta(days=val_days)
+        df_train = df[df["datetime"] <= val_cutoff_date].copy()
+        df_val = df[df["datetime"] > val_cutoff_date].copy()
+    elif val_mode == "ratio":
+        # 注意：对于时间序列，按比例的随机划分通常不推荐，因为它可能导致数据泄露。
+        # 这里的实现是按时间顺序进行的，更安全。
+        train_dfs, val_dfs = [], []
+        for _, group in df.groupby(["symbol", "period"]):
+            val_idx = int(len(group) * (1 - val_ratio))
+            train_dfs.append(group.iloc[:val_idx])
+            val_dfs.append(group.iloc[val_idx:])
+        df_train = pd.concat(train_dfs, ignore_index=True)
+        df_val = pd.concat(val_dfs, ignore_index=True)
+    else:
+        raise ValueError(f"Unknown val_mode: {val_mode}")
 
     targets = [
         "target_binarytrend",
@@ -123,20 +144,6 @@ def get_dataloaders(
     known_reals = ["time_idx"]
     df.replace({None: np.nan}, inplace=True)
 
-    train_parts, val_parts = [], []
-    for (sym, per), group_df in df.groupby(["symbol", "period"]):
-        group_df = group_df.sort_values("datetime")
-        if val_mode == "days":
-            val_cutoff = group_df["datetime"].max() - pd.Timedelta(days=val_days)
-            train_parts.append(group_df[group_df["datetime"] <= val_cutoff])
-            val_parts.append(group_df[group_df["datetime"] > val_cutoff])
-        elif val_mode == "ratio":
-            val_idx = int(len(group_df) * (1 - val_ratio))
-            train_parts.append(group_df.iloc[:val_idx])
-            val_parts.append(group_df.iloc[val_idx:])
-
-    df_train = pd.concat(train_parts, ignore_index=True)
-    df_val = pd.concat(val_parts, ignore_index=True)
 
     unknown_reals = [
         c for c in df_train.columns
@@ -147,10 +154,30 @@ def get_dataloaders(
         and not df_train[c].isna().all()
     ]
     sel_path = selected_features_path or os.path.join("configs", "selected_features.txt")
+    
+    # 动态筛选的 Alpha 特征
+    allowlist = []
     if sel_path and os.path.exists(sel_path):
         with open(sel_path, "r", encoding="utf-8") as fh:
-            allow = [ln.strip() for ln in fh if ln.strip() and not ln.strip().startswith("#")]
-        unknown_reals = [c for c in unknown_reals if c in allow]
+            allowlist = [ln.strip() for ln in fh if ln.strip() and not ln.strip().startswith("#")]
+
+    # 从配置注入的 Pinned 静态特征
+    pinned_features = []
+    if pinned_features_cfg and modality:
+        pinned_features = pinned_features_cfg.get(modality, [])
+        # rich 和 comprehensive 自动继承 base
+        if modality in ["rich", "comprehensive"]:
+            base_pinned = pinned_features_cfg.get("base", [])
+            pinned_features = list(dict.fromkeys(base_pinned + pinned_features))
+
+    # 合并 allowlist 和 pinned features，去重
+    combined_features = list(dict.fromkeys(allowlist + pinned_features))
+    
+    if combined_features:
+        # 验证特征是否存在于 DataFrame 中
+        available_cols = set(df_train.columns)
+        final_features = [f for f in combined_features if f in available_cols]
+        unknown_reals = [c for c in unknown_reals if c in final_features]
 
     symbol_classes = sorted(df_train["symbol"].dropna().unique().tolist())
     period_classes = sorted(df_train["period"].dropna().unique().tolist())

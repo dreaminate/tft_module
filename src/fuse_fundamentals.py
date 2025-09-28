@@ -52,6 +52,21 @@ def _pair_from_symbol(symbol_usdt: str) -> str:
     return f"{a}{b}"
 
 
+def _winsorize_z(s: pd.Series, lower: float = 0.005, upper: float = 0.995, eps: float = 1e-6) -> pd.Series:
+    """分位缩尾后做 Z 标准化。保持 NaN 为空。
+    """
+    if s is None or s.empty:
+        return s
+    x = s.astype(float)
+    ql = x.quantile(lower)
+    qu = x.quantile(upper)
+    x = x.clip(ql, qu)
+    mu = x.mean()
+    sd = x.std(ddof=0)
+    sd = sd if (sd is not None and sd > eps) else eps
+    return (x - mu) / sd
+
+
 # --------------- 读取单币种基本面 ---------------
 def load_symbol_fundamentals(
     symbol_usdt: str,
@@ -81,6 +96,11 @@ def load_symbol_fundamentals(
         "cgdi": True,
         "cdri": True,
         "borrow_interest": True,
+        # 新增：本地就绪时直接并入的 Rich 必备列
+        "funding_rate": True,
+        "oi_total": True,
+        "taker_buy_sell_imbalance": True,
+        "basis_z": True,
     }
     if include:
         inc.update(include)
@@ -221,6 +241,43 @@ def load_symbol_fundamentals(
             df["symbol"] = symbol_usdt
             rows.append(df)
 
+    # === 必备 Rich 列（按币种，若本地存在则并入；否则留空待全局口径补齐） ===
+    # funding_rate（若已有归一化列则优先 _z）
+    if inc.get("funding_rate", True):
+        # 尝试从已加载的 funding 派生 z 分数
+        pass  # 在全局口径统一处理（见后续 _finalize_rich_columns）
+    if inc.get("oi_total", True):
+        # 期货 OI 总量（若本地提供）
+        f_oi_tot = f"data/cglass/futures/open-interest/{symbol_usdt}_1d.csv"
+        df = _read_csv_head(f_oi_tot)
+        if not df.empty:
+            df["timestamp"] = _ensure_int_ms(df.get("timestamp", df.get("time"))).astype("int64")
+            cand = [c for c in df.columns if c.lower() in ("oi_total", "total_oi", "open_interest")] 
+            keep = [cand[0]] if cand else []
+            if keep:
+                df = df[["timestamp", keep[0]]].rename(columns={keep[0]: "oi_total"})
+                df["symbol"] = symbol_usdt
+                rows.append(df)
+    if inc.get("taker_buy_sell_imbalance", True):
+        # 现货吃单不平衡（若无 _z 列，则后续统一 z 标准化）
+        f_taker = f"data/cglass/spot/taker-buy-sell-volume/{pair}_1d.csv"
+        df = _read_csv_head(f_taker)
+        if not df.empty and "taker_imbalance" in df.columns:
+            df["timestamp"] = _ensure_int_ms(df["timestamp"]).astype("int64")
+            df = df[["timestamp", "taker_imbalance"]].copy().rename(columns={"taker_imbalance": "taker_buy_sell_imbalance"})
+            df["symbol"] = symbol_usdt
+            rows.append(df)
+    if inc.get("basis_z", True):
+        # 基差 z 分数（若仅有原始 close_basis，可在全局阶段标准化为 basis_z）
+        f_basis = f"data/cglass/futures/futures-basis-Binance-{pair}-1d.csv"
+        df = _read_csv_head(f_basis)
+        if not df.empty:
+            df["timestamp"] = _ensure_int_ms(df.get("timestamp", df.get("time"))).astype("int64")
+            if "close_basis" in df.columns:
+                df = df[["timestamp", "close_basis"]].copy().rename(columns={"close_basis": "basis_raw"})
+                df["symbol"] = symbol_usdt
+                rows.append(df)
+
     # CGDI 指数（期货动量/强弱）
     if inc.get("cgdi", True):
         f = f"data/cglass/futures/futures-cgdi-Binance-{pair}-1d.csv"
@@ -285,6 +342,8 @@ def load_global_fundamentals(include: Dict[str, bool] | None = None) -> pd.DataF
         "puell_multiple","stock_flow",
         # ETF
         "etf_btc","etf_eth",
+        # 新增：OnChain/ETF/Rich 指标直接可用列
+        "exch_netflow","cb_premium","etf_flow","etf_premium",
     ]
 
     if include is None:
@@ -621,6 +680,45 @@ def load_global_fundamentals(include: Dict[str, bool] | None = None) -> pd.DataF
             df = df[["timestamp", *keep]]
             rows.append(df)
 
+    # 交易所净流（exch_netflow）
+    if inc.get("exch_netflow", True):
+        f = "data/cglass/index/bitcoin-exchange_netflow.csv"
+        df = _read_csv_head(f)
+        if not df.empty:
+            df["timestamp"] = _ensure_int_ms(df.get("timestamp", df.get("time"))).astype("int64")
+            # 统一命名为 exch_netflow（BTC 全市场净流）
+            cand = [c for c in df.columns if c not in ("timestamp", "time")]
+            if cand:
+                df = df[["timestamp", cand[0]]].rename(columns={cand[0]: "exch_netflow"})
+                rows.append(df)
+
+    # Coinbase 溢价（cb_premium）
+    if inc.get("cb_premium", True):
+        f = "data/cglass/index/premium-index.csv"
+        df = _read_csv_head(f)
+        if not df.empty:
+            df["timestamp"] = _ensure_int_ms(df["timestamp"]).astype("int64")
+            if "premium" in df.columns:
+                df = df[["timestamp","premium"]].rename(columns={"premium": "cb_premium"})
+                rows.append(df)
+
+    # ETF 日净流/溢价（简化口径）
+    if inc.get("etf_flow", True):
+        f = "data/cglass/futures/futures-etf-btc.csv"
+        df = _read_csv_head(f)
+        if not df.empty and "change_usd" in df.columns:
+            df["timestamp"] = _ensure_int_ms(df["timestamp"]).astype("int64")
+            df = df[["timestamp","change_usd"]].rename(columns={"change_usd": "etf_flow"})
+            rows.append(df)
+    if inc.get("etf_premium", True):
+        f = "data/cglass/futures/futures-etf-btc.csv"
+        df = _read_csv_head(f)
+        if not df.empty and "price_usd" in df.columns:
+            df["timestamp"] = _ensure_int_ms(df["timestamp"]).astype("int64")
+            # 简化为价格偏离占位（若有正式 premium 列则替换）
+            df = df[["timestamp","price_usd"]].rename(columns={"price_usd": "etf_premium"})
+            rows.append(df)
+
     if not rows:
         return pd.DataFrame(columns=["timestamp"])  # 空表
     out = rows[0]
@@ -764,12 +862,62 @@ def fuse(
     # 需要前向填充的列集合（新加列）
     new_cols = [c for c in merged.columns if c not in base.columns]
     if new_cols:
-        merged = merged.sort_values(["symbol", "timestamp"])  # 保障时序
-        merged[new_cols] = (
-            merged.groupby("symbol", sort=False)[new_cols]
-                  .apply(lambda df: df.ffill())
-                  .reset_index(level=0, drop=True)
+        # 按 symbol,period 分组：先 shift(1) 再 ffill，保证“发布后下一根才生效”，且不跨 period 泄露
+        merged = merged.sort_values(["symbol", "period", "timestamp"])  # 保障时序
+        def _shift_ffill(df: pd.DataFrame) -> pd.DataFrame:
+            out = df.copy()
+            out[new_cols] = out[new_cols].shift(1).ffill()
+            return out
+        merged = (
+            merged.groupby(["symbol","period"], sort=False, group_keys=False)
+                  .apply(_shift_ffill)
+                  .reset_index(drop=True)
         )
+
+    # === 富模态口径统一：构建 11 个 Rich 列与旗标（缺失则占位 NaN） ===
+    rich_cols = [
+        "funding_rate", "oi_total", "taker_buy_sell_imbalance", "basis_z",
+        "etf_flow", "etf_premium", "active_addresses", "new_addresses",
+        "stablecoin_mcap", "exch_netflow", "cb_premium",
+    ]
+    for rc in rich_cols:
+        if rc not in merged.columns:
+            merged[rc] = float("nan")
+    # 从可能来源标准化/派生：
+    # - funding_rate: 优先已有 funding_rate_* 列或 taker_imbalance_z 替代占位
+    cand_fr = [c for c in merged.columns if c.startswith("funding_rate_")]
+    if not merged["funding_rate"].notna().any() and cand_fr:
+        merged["funding_rate"] = merged[cand_fr[0]].astype(float)
+    # - taker_buy_sell_imbalance: 若已有 taker_imbalance_z 或 taker_imbalance
+    if not merged["taker_buy_sell_imbalance"].notna().any():
+        if "taker_imbalance_z" in merged.columns:
+            merged["taker_buy_sell_imbalance"] = merged["taker_imbalance_z"].astype(float)
+        elif "taker_imbalance" in merged.columns:
+            merged["taker_buy_sell_imbalance"] = _winsorize_z(merged["taker_imbalance"].astype(float))
+    # - basis_z: 若存在 basis_raw 或 close_basis_futures_basis
+    if not merged["basis_z"].notna().any():
+        src_basis = None
+        if "basis_raw" in merged.columns:
+            src_basis = merged["basis_raw"].astype(float)
+        elif "close_basis_futures_basis" in merged.columns:
+            src_basis = merged["close_basis_futures_basis"].astype(float)
+        if src_basis is not None:
+            merged["basis_z"] = _winsorize_z(src_basis)
+    # - active_addresses / new_addresses / stablecoin_mcap
+    if "active_address_count_bitcoin_active_addresses" in merged.columns and not merged["active_addresses"].notna().any():
+        merged["active_addresses"] = merged["active_address_count_bitcoin_active_addresses"].astype(float)
+    if "new_address_count_bitcoin_new_addresses" in merged.columns and not merged["new_addresses"].notna().any():
+        merged["new_addresses"] = merged["new_address_count_bitcoin_new_addresses"].astype(float)
+    if "stablecoin_marketcap_total" in merged.columns and not merged["stablecoin_mcap"].notna().any():
+        merged["stablecoin_mcap"] = merged["stablecoin_marketcap_total"].astype(float)
+
+    # 构建旗标
+    merged["rich_available"] = (~merged[rich_cols].isna()).all(axis=1).astype(int)
+    merged["rich_quality"] = (~merged[rich_cols].isna()).mean(axis=1).astype(float)
+    # 缩尾与标准化关键尖峰变量（在不破坏 NaN 的前提下）
+    for col in ["funding_rate", "basis_z", "taker_buy_sell_imbalance", "etf_flow", "etf_premium", "exch_netflow", "cb_premium"]:
+        if col in merged.columns:
+            merged[col] = _winsorize_z(merged[col])
 
     missing_threshold_cols: List[str] = []
     missing_threshold_rows: int = 0
@@ -1078,7 +1226,15 @@ def _post_convert_full(out_csv: str, post_cfg: Dict[str, Any] | None) -> None:
         src = Path(out_csv)
         if not src.exists():
             return
-        df = pd.read_csv(src)
+        # 兼容异常 CSV：失败时回退到 engine='python' 并跳过坏行
+        try:
+            df = pd.read_csv(src, low_memory=False)
+        except Exception:
+            try:
+                df = pd.read_csv(src, engine='python', on_bad_lines='skip')
+            except Exception as e:
+                print(f"[warn] post_convert read failed: {e}")
+                return
         if periods and 'period' in df.columns:
             df = df[df['period'].isin(periods)]
         if post_cfg.get('pkl'):

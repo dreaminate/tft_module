@@ -2,6 +2,8 @@
 import yaml
 import torch
 import argparse
+import matplotlib
+matplotlib.use('Agg')  # Use non-interactive backend before other imports
 from typing import Optional
 from lightning.pytorch import Trainer
 from lightning.pytorch.callbacks import EarlyStopping
@@ -120,6 +122,21 @@ def _find_nearby_config(basename: str, cfg_path: str, expert: Optional[str]) -> 
     return None
 
 
+def _load_dataset_config(cfg_path: str, expert: Optional[str]) -> dict:
+    """按优先级查找 datasets.yaml 并加载。"""
+    p = _find_nearby_config("datasets.yaml", cfg_path, expert)
+    if p and os.path.exists(p):
+        return load_yaml(p)
+    # Fallback for old structure with separate files
+    modality = (_extract_meta_from_cfg_path(cfg_path) or {}).get("modality")
+    if modality:
+        basename = f"{modality}.yaml"
+        p = _find_nearby_config(f"datasets/{basename}", cfg_path, expert)
+        if p and os.path.exists(p):
+            return load_yaml(p)
+    return {}
+
+
 def _require_leaf_yaml(cfg_path: str, filenames: list[str]) -> dict:
     leaf_dir = os.path.dirname(os.path.abspath(cfg_path))
     found = {}
@@ -145,6 +162,11 @@ def main():
     # 优先使用命令行 --expert，其次 config 中的 expert 字段，其次从路径推断，再次 default_expert
     inferred = _extract_meta_from_cfg_path(cfg_path)
     expert_name = args.expert or model_cfg.get("expert") or inferred.get("expert")
+    
+    # 新增：加载数据集配置
+    dataset_cfg = _load_dataset_config(cfg_path, expert_name)
+    pinned_features_cfg = dataset_cfg.get("pinned_features", {})
+
     # 使用叶子 targets.yaml 决定目标与类型
     exp_name = expert_name or "default"
     leaf_dir = os.path.dirname(os.path.abspath(cfg_path))
@@ -188,6 +210,8 @@ def main():
         periods=[str(cfg_period)] if cfg_period else None,
         symbols=[str(s) for s in cfg_symbols] if cfg_symbols else None,
         selected_features_path=sel_feats_path,
+        pinned_features_cfg=pinned_features_cfg,
+        modality=inferred.get("modality"),
     )
     enc = train_ds.categorical_encoders.get("period", None)
     classes_ = getattr(enc, "classes_", None)
@@ -229,7 +253,7 @@ def main():
         loss_list=get_losses_by_targets(target_names),
         weights=_resolve_weights(weight_cfg or {}, target_names),
         output_size=output_size_arg,
-        metrics_list=get_metrics_by_targets(target_names),
+        metrics_list=get_metrics_by_targets(target_names, horizons=[str(resolved_period)]),
         target_names=target_names,
         period_map=period_map,
         learning_rate=model_cfg["learning_rate"],

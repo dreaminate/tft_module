@@ -1,0 +1,278 @@
+# Feature screening execution config - Windows CPU优化版
+# 专为Windows环境下CPU多核优化，充分利用32GB内存，保持计算质量
+
+# Filter阶段 - 充分利用内存和多核
+filter: 
+  enabled:  true
+  params: 
+    coverage_threshold:  0.4
+    variance_threshold:  1.0e-8
+    corr_threshold:  0.97
+    vif_threshold:  20
+    max_vif_iter:  20
+    suffix_dedup:  ['_zn', '_mm']
+    ic_targets:  ['target_logreturn', 'target_logsharpe_ratio']
+    mi_targets:  ['target_binarytrend', 'target_drawdown_prob', 'target_sideway_detect']
+    # Windows多核优化
+    n_jobs:  4                # Windows安全并行度
+    sample_frac:  1.0         # 使用全量数据（内存充足）
+    batch_size:  20000        # 大批量处理（利用内存）
+    chunk_size:  100          # 特征分块并行处理
+    # 使用更快的算法
+    use_fast_mi:  true        # 使用快速互信息估计
+    use_numba:  true          # 使用numba加速
+  per_channel: 
+    base:  {}
+    rich:  {}
+
+# Embedded阶段 - CPU优化
+embedded: 
+  enabled:  true
+  params: 
+    n_estimators:  300        # 保持模型质量
+    boruta_iterations:  20    # 保持Boruta质量
+    linear_cv:  5
+    linear_max_iter:  2000
+    sample_cap:  100000       # 增大样本量（内存充足）
+    tree_max_features:  'sqrt'  # 限制特征数加速
+    n_jobs:  4                # Windows并行度
+    
+    # 使用RandomForest（CPU优化）
+    tree_backend:  sklearn    # 使用sklearn的RandomForest
+    use_gpu:  false
+    
+    # RandomForest优化参数
+    rf_params:
+      n_jobs:  4              # 内部并行
+      max_depth:  20          # 限制深度加速
+      min_samples_split:  50  # 避免过拟合
+      min_samples_leaf:  20
+      max_features:  'sqrt'
+      bootstrap:  true
+      oob_score:  true        # 利用OOB评分
+      warm_start:  true       # 增量训练
+      
+    # 提前停止
+    early_stopping_rounds:  10
+    
+    # 特征重要性聚合
+    importance_agg:  'mean'   # 使用均值聚合
+    
+    # VSN配置
+    use_vsn:  true
+    vsn_csv:  null
+    
+  per_channel: 
+    base:  {}
+    rich:  {}
+
+# 专家配置（保持不变）
+experts: 
+  alpha_dir_tft: 
+    name:  Alpha-Dir-TFT
+    pkl_base:  data/merged/expert_group/Alpha-Dir-TFT-base/full_merged_with_fundamentals_Alpha-Dir-TFT-base.pkl
+    pkl_rich:  data/merged/expert_group/Alpha-Dir-TFT-rich/full_merged_with_fundamentals_Alpha-Dir-TFT-rich.pkl
+    periods:  ["1h", "4h", "1d"]
+    targets:  ["target_binarytrend"]
+
+  alpha_ret_tft: 
+    name:  Alpha-Ret-TFT
+    pkl_base:  data/merged/expert_group/Alpha-Ret-TFT-base/full_merged_with_fundamentals_Alpha-Ret-TFT-base.pkl
+    pkl_rich:  data/merged/expert_group/Alpha-Ret-TFT-rich/full_merged_with_fundamentals_Alpha-Ret-TFT-rich.pkl
+    periods:  ["1h", "4h", "1d"]
+    targets:  ["target_logreturn", "target_logsharpe_ratio"]
+
+  risk_prob_tft: 
+    name:  Risk-Prob-TFT
+    pkl_base:  data/merged/expert_group/Risk-Prob-TFT-base/full_merged_with_fundamentals_Risk-Prob-TFT-base.pkl
+    pkl_rich:  data/merged/expert_group/Risk-Prob-TFT-rich/full_merged_with_fundamentals_Risk-Prob-TFT-rich.pkl
+    periods:  ["1h", "4h", "1d"]
+    targets:  ["target_drawdown_prob", "target_vol_jump_prob"]
+
+  risk_reg_tft: 
+    name:  Risk-Reg-TFT
+    pkl_base:  data/merged/expert_group/Risk-Reg-TFT-base/full_merged_with_fundamentals_Risk-Reg-TFT-base.pkl
+    pkl_rich:  data/merged/expert_group/Risk-Reg-TFT-rich/full_merged_with_fundamentals_Risk-Reg-TFT-rich.pkl
+    periods:  ["1h", "4h", "1d"]
+    targets:  ["target_max_drawdown", "target_realized_vol"]
+
+  derivatives_micro: 
+    name:  MicroStruct-Deriv-TFT
+    pkl_base:  data/merged/expert_group/MicroStruct-Deriv-TFT-base/full_merged_with_fundamentals_MicroStruct-Deriv-TFT-base.pkl
+    pkl_rich:  data/merged/expert_group/MicroStruct-Deriv-TFT-rich/full_merged_with_fundamentals_MicroStruct-Deriv-TFT-rich.pkl
+    periods:  ["1h", "4h"]
+    targets:  ["target_binarytrend", "target_logreturn"]
+
+  onchain_fundflow: 
+    name:  OnChain-ETF-TFT
+    pkl_base:  data/merged/expert_group/OnChain-ETF-TFT-base/full_merged_with_fundamentals_OnChain-ETF-TFT-base.pkl
+    pkl_rich:  data/merged/expert_group/OnChain-ETF-TFT-rich/full_merged_with_fundamentals_OnChain-ETF-TFT-rich.pkl
+    periods:  ["1h", "4h", "1d"]
+    targets:  ["target_fundflow_strength"]
+
+  regime_gating: 
+    name:  Regime-Gate
+    pkl_base:  data/merged/expert_group/Regime-Gate-base/full_merged_with_fundamentals_Regime-Gate-base.pkl
+    pkl_rich:  data/merged/expert_group/Regime-Gate-rich/full_merged_with_fundamentals_Regime-Gate-rich.pkl
+    periods:  ["1h", "4h", "1d"]
+    targets:  ["target_sideway_detect"]
+    skip_selection:  true
+
+  breakout_levels: 
+    name:  KeyLevel-Breakout-TFT
+    pkl_base:  data/merged/expert_group/KeyLevel-Breakout-TFT-base/full_merged_with_fundamentals_KeyLevel-Breakout-TFT-base.pkl
+    pkl_rich:  data/merged/expert_group/KeyLevel-Breakout-TFT-rich/full_merged_with_fundamentals_KeyLevel-Breakout-TFT-rich.pkl
+    periods:  ["1h", "4h", "1d"]
+    targets:  ["target_breakout_prob"]
+
+  relative_strength: 
+    name:  RelativeStrength-Spread-TFT
+    pkl_base:  data/merged/expert_group/RelativeStrength-Spread-TFT-base/full_merged_with_fundamentals_RelativeStrength-Spread-TFT-base.pkl
+    pkl_rich:  data/merged/expert_group/RelativeStrength-Spread-TFT-rich/full_merged_with_fundamentals_RelativeStrength-Spread-TFT-rich.pkl
+    periods:  ["1h", "4h", "1d"]
+    targets:  ["target_binarytrend", "target_logreturn"]
+
+  factor_bridge: 
+    name:  Factor-Bridge-TFT
+    pkl_base:  data/merged/expert_group/Factor-Bridge-TFT-base/full_merged_with_fundamentals_Factor-Bridge-TFT-base.pkl
+    pkl_rich:  data/merged/expert_group/Factor-Bridge-TFT-rich/full_merged_with_fundamentals_Factor-Bridge-TFT-rich.pkl
+    periods:  ["1d"]
+    targets:  ["target_logsharpe_ratio"]
+    skip_selection:  true
+
+# Split schemes
+splits: 
+  outer_val: 
+    mode:  days
+    days:  90
+    ratio:  0.2
+  inner: 
+    n_splits:  5
+    val_ratio:  0.2
+
+# Time-aware permutation importance - CPU优化
+permutation: 
+  enabled:  true
+  method:  cyclic_shift
+  block_len:  36
+  block_len_by_period: 
+    "1h":  36
+    "4h":  36
+    "1d":  36
+  embargo:  0
+  purge:  0
+  embargo_by_period:  {}
+  purge_by_period:  {}
+  n_estimators:  300          # 保持模型质量
+  seed:  42
+  group_cols:  ["symbol"]
+  repeats:  5                 # 保持统计稳定性
+  # CPU优化
+  use_gpu:  false
+  n_jobs:  4
+  tree_params:
+    n_jobs:  -1               # 内部全并行
+    max_depth:  20
+    min_samples_split:  50
+  # 批量计算优化
+  batch_size:  50             # 大批量处理特征
+  parallel_backend:  'threading'  # Windows下使用线程
+
+# TFT gating
+tft_gating: 
+  enabled:  false
+  ckpt:  checkpoints/last.ckpt
+  model_config:  configs/experts/Alpha-Dir-TFT/1h/base/model_config.yaml
+  weights_config:  configs/experts/Alpha-Dir-TFT/1h/base/weights_config.yaml
+  max_batches:  50
+  tft_bonus:  0.2
+  out_csv:  reports/feature_evidence/tft_gating.csv
+
+# Aggregation配置
+aggregation: 
+  weights_yaml:  null
+  topk_core:  128
+  topk_per_pair:  64
+  min_appear_rate:  0.5
+  min_appear_rate_era:  0.6
+  rich_quality_weights: 
+    "1h":  0.9
+    "4h":  1.0
+    "1d":  1.0
+
+# Wrapper search - CPU优化
+wrapper: 
+  method:  rfe
+  rfe: 
+    patience:  10
+    sample_cap:  80000        # 增大样本量
+    # CPU优化
+    use_gpu:  false
+    n_jobs:  4
+    # 批量评估优化
+    batch_eval:  true
+    batch_size:  20           # 大批量评估
+    # 使用缓存
+    cache_scores:  true
+    cache_dir:  'cache/rfe_scores'
+    # 使用增量学习
+    warm_start:  true
+  ga:
+    pop:  30
+    gen:  15
+    cx:  0.7
+    mut:  0.1
+    sample_cap:  80000
+    # CPU优化
+    use_gpu:  false
+    n_jobs:  4
+    # 并行评估种群
+    parallel_eval:  true
+    eval_batch_size:  15      # 批量评估
+    # 使用缓存
+    cache_fitness:  true
+    # 多目标优化
+    multi_objective:  false
+    weights:
+      classification:  1.0
+      regression:  1.0
+    seeds:  [42, 2025, 7]
+
+# Finalization
+finalize: 
+  expert_only_max:  48
+  max_online_latency_ms:  2000
+  outputs: 
+    core_summary_csv:  reports/feature_evidence/aggregated_core.csv
+    core_allowlist_txt:  configs/selected_features.txt
+    optimized_allowlist_txt:  reports/feature_evidence/optimized_features.txt
+    plus_allowlist_txt:  reports/feature_evidence/plus_features.txt
+  post_validation: 
+    enabled:  true
+    method:  rolling
+    n_splits:  5
+    val_ratio:  0.2
+    min_score:  null
+  documentation: 
+    summary:  true
+  forward_compare:
+    enabled:  false
+
+# Windows CPU优化专用
+runtime:
+  # 使用线程而非进程（Windows下更高效）
+  parallel_backend:  'threading'
+  # 内存映射优化
+  use_memory_mapping:  true
+  # 预分配内存
+  preallocate_memory:  true
+  # 使用快速数学库
+  use_mkl:  true              # Intel MKL加速
+  # 数据类型优化
+  use_float32:  false         # CPU保持float64精度
+  # 缓存优化
+  cache_size:  '8GB'          # 使用8GB缓存
+  # 批处理优化
+  enable_batch_compute:  true
+  # 向量化优化
+  enable_vectorization:  true

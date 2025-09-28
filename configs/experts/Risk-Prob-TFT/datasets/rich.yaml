@@ -1,0 +1,40 @@
+dataset_type: combined
+max_missing_ratio: null
+feature_list_path: reports/feature_evidence/Risk-Prob-TFT/rich/selected_features.txt
+no_nan_policy:
+  enabled: true
+  scope: onchain
+  method: intersect
+include_symbol:
+  funding_oi: true
+  funding_vol: true
+  oi: true
+  ls_global: true
+  ls_top_acc: true
+  ls_top_pos: true
+  basis: true
+  whale: true
+  taker: true
+  cgdi: false
+  cdri: false
+  borrow_interest: false
+include_global:
+  premium: true
+  altcoin: true
+  etf: true
+  macro: true
+  stable: true
+extra_field:
+  name: Risk-Prob-TFT
+  value: rich
+  append_to_filename: both
+  group_to_folder: true
+  folder_mode: both
+  folder_root: data/merged/expert_group
+post_convert:
+  pkl: true
+  parquet: false
+  periods:
+  - 1h
+  - 4h
+  - 1d

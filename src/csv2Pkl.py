@@ -126,19 +126,26 @@ def convert_csv_to_pkl(src_file: Path, dst_file: Path, selected_periods: Optiona
 
 if __name__ == '__main__':
     ap = argparse.ArgumentParser()
-    ap.add_argument('--config', default='pipelines/configs/fuse_fundamentals.yaml')
+    ap.add_argument('--config', default=None)
     ap.add_argument('--which', choices=['full','slim'], default='full', help='转换 full 或 slim 输出')
     ap.add_argument('--periods', nargs='*', default=["1h","4h","1d"])
+    ap.add_argument('--src', type=str, default=None, help='Directly specify source CSV file')
+    ap.add_argument('--dst', type=str, default=None, help='Directly specify destination PKL file')
     args = ap.parse_args()
 
-    cfg = _load_yaml(args.config)
-    src, dst = _compose_paths(cfg, args.which)
-    convert_csv_to_pkl(src, dst, args.periods)
-    
-    # 也顺手提示 slim/full 另一个文件位置
-    other = 'slim' if args.which == 'full' else 'full'
-    try:
-        o_src, o_dst = _compose_paths(cfg, other)
-        print(f"ℹ️ 另外一个输出: {other}: {o_src} -> {o_dst.with_suffix('.pkl')}")
-    except Exception:
-        pass
+    if args.src and args.dst:
+        convert_csv_to_pkl(Path(args.src), Path(args.dst), args.periods)
+    elif args.config:
+        cfg = _load_yaml(args.config)
+        src, dst = _compose_paths(cfg, args.which)
+        convert_csv_to_pkl(src, dst, args.periods)
+        
+        # 也顺手提示 slim/full 另一个文件位置
+        other = 'slim' if args.which == 'full' else 'full'
+        try:
+            o_src, o_dst = _compose_paths(cfg, other)
+            print(f"ℹ️ 另外一个输出: {other}: {o_src} -> {o_dst.with_suffix('.pkl')}")
+        except Exception:
+            pass
+    else:
+        print("❌ 请提供 --config 或 --src 与 --dst 参数之一")

@@ -1,5 +1,101 @@
 ﻿# 更新日志
 
+## 2025-09-28 — 专家体系全面升级与9+1架构完整实现（v0.2.8）
+
+### 专家架构全面升级
+- **9+1专家体系完整落地**：实现Alpha-Dir、Alpha-Ret、Risk-Prob、Risk-Reg、MicroStruct-Deriv、OnChain-ETF、Regime-Gate、KeyLevel-Breakout、RelativeStrength-Spread等9个专业专家 + Z-Combiner融合层
+- **专家职责明确分工**：
+  - Alpha-Dir：方向预测（二分类：上涨/下跌概率）
+  - Alpha-Ret：收益回归（预期收益幅度预测）
+  - Risk-Prob：风险概率（极端风险事件概率）
+  - Risk-Reg：风险回归（回撤/波动幅度预测）
+  - MicroStruct-Deriv：微观结构（资金费率、持仓变化等）
+  - OnChain-ETF：链上/ETF资金流（链上数据与ETF动向）
+  - Regime-Gate：市场体制识别（趋势/震荡/高波动/危机状态）
+  - KeyLevel-Breakout：关键位突破（支撑/阻力突破概率）
+  - RelativeStrength-Spread：相对强弱（跨币种相对表现）
+  - Factor-Bridge：因子桥接（传统因子 ↔ 加密代理）
+  - Z-Combiner：智能融合层（多策略加权组合）
+
+### Base/Rich并行融合机制
+- **长短历史并行**：Base模态（全时代覆盖）与Rich模态（近年高质量数据）并行训练
+- **α门控自适应加权**：基于市场状态、数据质量、延迟等因素动态调整Base/Rich权重
+- **自然降级机制**：Rich数据缺失时α自动归零，回退到Base模态
+- **训练损失设计**：主损失 + Base/Rich辅助损失，鼓励各模态独立学好
+
+### 防泄露数据处理体系
+- **慢频数据广播**：1d/4h → 4h/1h数据严格shift(1)→ffill，确保无未来信息泄露
+- **严格时序审计**：`utils/audit_no_leakage.py`检查重复、时序倒退、异常间隔
+- **可用性标记**：为Rich关键字段维护`rich_available_t∈{0,1}`与`rich_quality_t∈[0,1]`
+- **时代标签**：引入`era_id`用于稳健性统计和跨时代稳定性评估
+
+### 特征选择高级特性
+- **四阶段筛选管线**：过滤（统计指标）→内嵌（模型重要性）→时间置换（稳健性验证）→包装搜索（子集优化）
+- **TFT-VSN权重集成**：将TFT变量选择网络重要度纳入综合打分
+- **跨时代稳定性**：支持按时代分组评估特征出现率和稳定性
+- **GA多seed优化**：遗传算法支持多种子并行，提升搜索稳定性
+- **RFE近似器优化**：优先使用LightGBM减少计算成本
+
+### 嵌套时序交叉验证
+- **严格防泄露**：内层CV用于特征选择和超参数调优，外层CV仅用于最终评估
+- **滚动前瞻验证**：支持扩窗和滚动窗口前瞻，确保评估无泄露
+- **多重验证指标**：分币种×周期详细报告，支持策略层回测指标
+
+### 统一预测契约
+- **标准化输出**：`{score, uncertainty, meta}`统一格式，包含完整元信息
+- **自动校准机制**：温度缩放、ECE、Brier分数、P10/P50/P90覆盖率
+- **批量预测支持**：自动写入parquet格式，包含版本和时间戳信息
+
+### Z层智能组合
+- **多策略融合**：规则加权、Stacking元学习、动态门控
+- **风险控制集成**：与Risk专家联动，实现仓位上限和止损阈值控制
+- **风格约束**：与Factor-Bridge专家联动，限制Alpha风格偏离
+- **自动基线对比**：与"等权"和"单最佳专家"策略自动对比
+
+### 专家配置管理
+- **自包含配置**：每个专家×周期×模态目录自包含完整配置
+- **Pinned特性**：每位专家可定义默认保留字段，特征筛选时优先保护
+- **就近查找机制**：训练脚本支持配置就近查找，提升配置管理灵活性
+
+### 文档与工具升级
+- **README全面更新**：新增专家架构总览、完整工作流、专家接入指南
+- **CLI工具增强**：`experts_cli.py`支持list/train/resume/warm等完整操作
+- **一键构建工具**：`build_full_merged.py`串联指标→目标→合并流程
+- **审计工具完善**：泄露检测、数据质量检查、版本一致性验证
+
+### 兼容性与迁移
+- **向后兼容**：保持与现有训练脚本和配置的兼容性
+- **平滑迁移**：支持渐进式采用新特性的迁移路径
+- **配置瘦身**：移除冗余配置，统一管理专家数据集配置
+
+## 2025-09-22 — 新增专家接入流程与 OnChain/base/rich 统一规则（v0.2.7）
+
+新增/变更：
+
+- 新增专家接入说明与落地：
+  - 在 `configs/experts/<Expert>/datasets/{base,rich}.yaml` 定义数据集；
+  - 在 `pipelines/configs/fuse_fundamentals.yaml` 的 `experts_map` 注册 `<Expert>_{base|rich}`；
+  - 在 `pipelines/configs/feature_selection.yaml` 的 `experts:` 注册该专家（支持 `pkl_base/pkl_rich`）。
+- 输入统一：
+  - base 与 rich 均基于最新 `data/merged/full_merged.csv` 构建；
+  - rich 对链上/ETF等 rich 列做 `no_nan_policy(scope:onchain, method:intersect)` 最大行交集；
+  - OnChain 专家筛选仅使用链上/ETF特征，但其 `target_*` 目标列始终保留。
+- pinned 规则与训练清单：
+  - `experts.md` 中每个专家的 base/rich 小节列出的字段均为默认保留（pinned）；
+  - rich 的 pinned= base 小节 + rich 小节 的并集；
+  - 训练用清单 = 聚合核心集 ∪ 当前专家通道的 pinned；并为每个叶子目录写入专属 `selected_features.txt`。
+
+影响文件：
+
+- `README.md`（新增“新增专家接入”章节、示例命令与规则说明）
+- `pipelines/configs/feature_selection.yaml`（支持 `pkl_base/pkl_rich` 条目）
+- `features/selection/run_pipeline.py`（rich pinned=base∪rich；OnChain 链上-only；训练清单合并）
+
+兼容性：
+
+- 不破坏既有专家；未配置 `pkl_rich` 的专家仅跑 base。
+- OnChain 专家在筛选阶段不使用技术面作为特征，但目标列始终保留。
+
 ## 2025-09-22 — Pinned 默认字段 + 字段解析报表（v0.2.6）
 
 新增/变更：
@@ -335,4 +431,28 @@
 
 - 若外部脚本/文档仍假定存在 `configs/model_config.yaml`，需改为显式传入 `--config` 或指向某个专家叶子；README 已更新。
 - 运行期验证：建议在本地数据可用时分别跑一次训练与管线，以确认路径迁移无遗漏。
+
+## 2025-09-22 — 优化建议与未来改进（v0.2.8）
+
+新增/变更：
+
+- 建议添加自动化监控脚本，例如融合后数据质量检查（检查缺失率、异常值分布等），以应对未来数据源变化。
+- 建议进行端到端测试（融合 → 筛选 → 训练），以验证整体性能和稳定性。
+- 如果数据规模增大，考虑迁移到云资源以优化计算效率。
+
+影响文件：
+
+- 无直接代码变更；这些为未来开发建议，可作为 Roadmap 参考。
+
+兼容性：
+
+- 不影响现有功能；可逐步实现。
+
+- **Feature Management Overhaul**:
+  - **Centralized Static Features**: Introduced `pinned_features` section in `configs/experts/**/datasets/*.yaml` files. This now serves as the single source of truth for static (default) features for each expert and modality (`base`, `rich`, etc.), ensuring consistency with the feature selection pipeline.
+  - **Decoupled Feature Loading**: Modified the training pipeline (`train_multi_tft.py` and `data/load_dataset.py`) to read `pinned_features` from the new YAML configs.
+  - **Combined Feature Set**: The final feature set for training is now a robust union of:
+    1.  Statically defined `pinned_features` from `datasets.yaml`.
+    2.  Dynamically selected alpha features from `selected_features.txt`.
+  - This resolves the issue of missing base features during training and aligns the codebase with a more robust, config-driven design, removing the need for manual file copying.
 

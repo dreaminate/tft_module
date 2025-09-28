@@ -1,0 +1,2 @@
+custom_weights_by_target:
+  target_logsharpe_ratio: 1.0

@@ -176,7 +176,8 @@ class MyTFTModule(LightningModule):
         self.metric_is_cls = [any(n.split("@")[0].endswith(s) for s in cls_suffix) for n in self.metric_names]
         self.confmats = nn.ModuleDict({
             name: torchmetrics.classification.BinaryConfusionMatrix()
-            for name, is_cls in zip(self.metric_names, self.metric_is_cls) if is_cls
+            for name, is_cls in zip(self.metric_names, self.metric_is_cls)
+            if is_cls and "_ap" not in name and "_auc" not in name
         })
 
         self.period_group_idx = dataset.group_ids.index("period")
@@ -454,13 +455,17 @@ class MyTFTModule(LightningModule):
     def on_validation_epoch_end(self):
         super().on_validation_epoch_end()
         for name, metric in zip(self.metric_names, self.metrics_list):
+            val = float('nan')
             try:
+                # compute() can fail if validation batch has only one class for AP/AUC
                 val = metric.compute()
-            except Exception:
-                metric.reset()
-                continue
-            self.log(f"val_{name}", val, on_epoch=True, batch_size=1)
+            except (ValueError, RuntimeError) as e:
+                self.print(f"Warn: could not compute metric '{name}': {e}")
+
+            # Log NaN if computation fails; EarlyStopping handles this gracefully
+            self.log(f"val_{name}", val, on_epoch=True, prog_bar=True)
             metric.reset()
+
         for tag, cm in self.confmats.items():
             try:
                 cm_val = cm.compute().cpu().numpy()
@@ -529,13 +534,16 @@ class MyTFTModule(LightningModule):
             logits = torch.cat([e['logits'] for e in entries], dim=0)
             labels = torch.cat([e['labels'] for e in entries], dim=0)
             probs = torch.sigmoid(logits)
-            temperature = temperature_scale_binary(logits, labels)
-            scaled_probs = torch.sigmoid(logits / temperature)
-            ece_value = compute_ece(scaled_probs, labels)
-            brier_value = brier_score(scaled_probs, labels)
-            self.calibration_temperature[target_name] = float(temperature)
-            self.log(f"val_ece@{target_name}", float(ece_value), on_epoch=True, prog_bar=False, logger=True)
-            self.log(f"val_brier@{target_name}", float(brier_value), on_epoch=True, prog_bar=False, logger=True)
+            scaled_logits, temperature = temperature_scale_binary(logits, labels)
+            scaled_probs = torch.sigmoid(scaled_logits)
+
+            # 使用校准后的概率计算 ECE 和 Brier Score
+            ece_after = compute_ece(scaled_probs.numpy(), labels.numpy())
+            brier_after = brier_score(labels.numpy(), scaled_probs.numpy().flatten())
+
+            self.log(f"val_{target_name}_ece_after_temp_scale", ece_after, on_step=False, on_epoch=True, prog_bar=True)
+            self.log(f"val_{target_name}_brier_after_temp_scale", brier_after, on_step=False, on_epoch=True, prog_bar=False)
+            self.log(f"val_{target_name}_temperature", temperature, on_step=False, on_epoch=True, prog_bar=False)
 
             bins = reliability_curve(scaled_probs, labels)
             if bins['confidence'].numel() and hasattr(self.logger, 'experiment'):

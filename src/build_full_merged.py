@@ -58,7 +58,7 @@ def main():
         print(f"[indicators] period={p}")
         indicating_main(p)
 
-    # 2) 生成目标 + 输出到 targeted 目录
+    # 2) 生成目标 + 输出到 targeted 目录（含新增 4 个目标：fundflow_strength/vol_jump_prob/realized_vol/breakout_prob）
     print("[targets] converting indicated -> targeted_and_indicated ...")
     convert_selected_periods_to_csv(args.indicated_root, args.targeted_root, selected_periods=periods)
 

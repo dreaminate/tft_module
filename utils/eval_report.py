@@ -51,8 +51,10 @@ def build_eval_report(
                 pr_auc = float(average_precision_score(labels_g, probs_g)) if np.unique(labels_g).size > 1 else float('nan')
             except ValueError:
                 pr_auc = float('nan')
-            ece_val = compute_ece(torch.from_numpy(probs_g), torch.from_numpy(labels_g), n_bins=n_bins)
-            brier_val = brier_score(torch.from_numpy(probs_g), torch.from_numpy(labels_g))
+            ece_val = compute_ece(probs_g, labels_g, n_bins=n_bins)
+            # Corrected argument order: y_true, y_prob
+            binarized_labels = (labels_g > 0.5).astype(np.int32)
+            brier_val = brier_score(binarized_labels, probs_g)
             records.append({
                 'symbol': _symbol_name(symbol_names, int(sym_i)),
                 'period': _period_name(period_map, int(per_i)),

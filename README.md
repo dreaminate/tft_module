@@ -1,40 +1,45 @@
 # tft_module
 
-多目标 Temporal Fusion Transformer (TFT) 项目，面向加密 / 股票等金融时间序列的多周期、多任务预测。
+多目标 Temporal Fusion Transformer (TFT) 项目，面向加密货币 / 股票等金融时间序列的多周期、多任务预测。项目采用9+1专家架构，包含Alpha-Dir、Alpha-Ret、Risk-Prob、Risk-Reg、MicroStruct-Deriv、OnChain-ETF、Regime-Gate、RelativeStrength-Spread、Factor-Bridge等9个专业专家模型，以及一个Z-Combiner融合层。
 
-## 最新亮点（v0.2.2）
+## 最新亮点（v0.2.8）
 
-- **预测契约统一**：`MyTFTModule.predict_step` 直接输出 `{score, uncertainty, meta}`，并将批次结果写入 `predictions_{expert}_{period}_{timestamp}.parquet`，含 `symbol/period/time_idx/head_scale/head_bias/schema_ver/...` 等元信息。
-- **校准与稳定评估**：在验证阶段自动执行温度缩放、ECE、Brier、P10/P50/P90 覆盖率与 Pinball Loss；生成 per-symbol × period 汇总表，并将可靠性曲线、各类指标写入 TensorBoard。
-- **单指标监控**：分类任务以 `val_*_ap@period` 监控，回归任务以 `val_*_rmse@period` 监控，`utils/stage_summary.py` 仅保留 `best_monitor` + `best_val_loss`。
-- **Regime 核心特征**：`features/regime_core.py` 产出波动、量能、资金费率 / OI 斜率、动量、ATR 斜率、结构 gap 等慢频字段，自动融合进 OOF 数据集。
-- **OOF ↦ Z 层训练闭环**：`pipelines/build_oof_for_z.py` 汇总各专家预测、校验版本一致性，生成 `datasets/z_train.parquet`；`experts/Z-Combiner/train_z.py` 基于 OOF 数据训练二层 Stacking（Logistic / MLP），并与“等权”“单最佳专家”基线比较。
-- **无泄漏审计**：`utils/audit_no_leakage.py` 快速检测 `z_train.parquet` 是否存在重复、时间倒退、缺失或时间间隔异常。
+- **专家体系完整实现**：9+1专家架构全面落地，涵盖方向预测、收益回归、风险评估、微观结构、链上数据、市场体制、关键位突破、相对强弱、因子桥接等全领域专业能力
+- **Base/Rich并行融合**：长历史基础特征与近年丰富模态并行训练，α门控自适应加权，缺失时自然回退
+- **多证据特征选择**：四阶段筛选管线（过滤→内嵌→时间置换→包装搜索），支持TFT-VSN权重、跨时代稳定性评估
+- **防泄露数据处理**：慢频数据shift→ffill广播，严格的时序审计，确保训练数据无未来信息泄露
+- **嵌套时序CV**：内层特征选择与调参，外层滚动前瞻评估，确保评估无泄露
+- **统一预测契约**：标准化输出`{score, uncertainty, meta}`，支持多符号多头架构，自动校准与可靠性评估
+- **Z层智能组合**：基于专家预测和市场状态的动态权重分配，支持风格约束和风险制动
 
-### 训练与特征筛选体验（v0.2.2 增强）
+### 训练与特征筛选体验（v0.2.8 增强）
 
-- XGBoost 2.x 支持：统一使用 `tree_method="hist" + device="cuda"`，旧版自动回退 `gpu_hist/gpu_predictor`。
-- Lightning 进度条默认开启，同时日志频率由配置控制：
-  - 在专家叶子 `model_config.yaml` 中设置 `log_every_n_steps`（优先）或 `log_interval`，未设置时默认 100。
-  - 相关脚本：`train_multi_tft.py`、`train_resume.py`、`warm_start_train.py`。
-- 特征筛选线性路径更稳健：
-  - `embedded_stage.py` 将 `linear_max_iter` 默认提高到 2000；
-  - 在 `LogisticRegressionCV` / `ElasticNetCV` 拟合时静默 `ConvergenceWarning`（不影响结果，仅抑制噪声）。
+- **XGBoost 2.x兼容**：所有特征筛选和树模型统一使用`tree_method="hist" + device="cuda"`，旧版自动回退
+- **专家化配置管理**：每个专家×周期×模态自包含完整配置，支持就近查找和自动推断
+- **智能监控指标**：分类任务自动选择`val_*_ap@period`，回归任务选择`val_*_rmse@period`作为早停指标
+- **特征筛选高级特性**：
+  - TFT-VSN重要度纳入综合打分
+  - 跨时代稳定性评估与出现率过滤
+  - GA多seed支持与RFE近似器优化
+  - Base/Rich质量权重自适应缩放
+  - 前瞻对照验证确保无泄露
+- **训练日志优化**：进度条默认开启，可配置日志频率，自动保存`last.ckpt`
 
-## 数据融合（Fundamentals + On-chain）
+## 专家数据管理（Base/Rich并行）
 
-- 主流程：`src/fuse_fundamentals.py` → `fuse()`；推荐通过 `pipelines/configs/fuse_fundamentals.yaml` + `run_with_config()` 驱动。
-- 执行命令：
+- **专家数据集配置**：每位专家在`configs/experts/<Expert>/datasets/`下维护base/rich两套配置
+  - `base.yaml`：基础技术面数据，`dataset_type=fundamentals_only`，适合长历史覆盖
+  - `rich.yaml`：包含链上/ETF/衍生品数据，`dataset_type=combined`，使用交集策略确保数据质量
+  - `comprehensive.yaml`：完整特征集合，结合base和rich的优点
+
+- **融合执行**：通过`pipelines/configs/fuse_fundamentals.yaml`统一调度，支持多专家并行融合
 
   ```bash
   python -c "from src.fuse_fundamentals import run_with_config; run_with_config('pipelines/configs/fuse_fundamentals.yaml')"
   ```
 
-- 每位专家的具体字段配置存放在 `configs/experts/<Expert>/datasets/base.yaml` 与 `configs/experts/<Expert>/datasets/rich.yaml`；`experts_map` 只引用这些文件，便于按专家自管理。
-- 配置约定：
-  - `*_base`：`dataset_type=fundamentals_only`，`max_missing_ratio=0.01`（缺失率>1% 的样本行被删除），默认不启用交集裁剪，适合覆盖早期样本。
-  - `*_rich`：`dataset_type=combined`，`max_missing_ratio: null`，保留所有链上指标，由 `no_nan_policy(scope:onchain, method:intersect)` 对链上列求交集，适合近段完整数据。
-  - `extra_field` 将所有输出命名为 `<Expert>_<base|rich>` 并写入 `data/merged/expert_group/<Expert>_<base|rich>/`。
+- **输出结构**：`data/merged/expert_group/<Expert>_{base|rich|comprehensive}/` 按专家和模态分组存放
+- **Pinned特性**：每位专家可定义默认保留字段（pinned_features），在特征筛选时优先保留，确保核心特征不被误删
 
 - 运行结束自动生成：
   - `full_merged_with_fundamentals.{csv,pkl}` 与 `full_merged_slim.csv`；
@@ -63,6 +68,27 @@
 
   - `post_convert` 会沿用全局配置。如需为单个专家单独设置（仅导出 CSV 或关闭 PKL），可在该条目下覆盖 `post_convert` 字段。
 
+## 专家架构总览（9+1体系）
+
+项目采用完整的9+1专家架构，涵盖金融时间序列预测的全领域能力：
+
+### 9个专业专家
+
+1. **Alpha-Dir-TFT** - 方向预测（二分类：上涨/下跌概率）
+2. **Alpha-Ret-TFT** - 收益回归（预期收益幅度预测）
+3. **Risk-Prob-TFT** - 风险概率（极端风险事件概率）
+4. **Risk-Reg-TFT** - 风险回归（回撤/波动幅度预测）
+5. **MicroStruct-Deriv-TFT** - 微观结构（资金费率、持仓变化等）
+6. **OnChain-ETF-TFT** - 链上/ETF资金流（链上数据与ETF动向）
+7. **Regime-Gate** - 市场体制识别（趋势/震荡/高波动/危机状态）
+8. **KeyLevel-Breakout-TFT** - 关键位突破（支撑/阻力突破概率）
+9. **RelativeStrength-Spread-TFT** - 相对强弱（跨币种相对表现）
+
+### Z-Combiner融合层
+- 基于各专家预测结果的智能加权组合器
+- 支持规则融合、Stacking元学习、动态门控等多种策略
+- 集成风险控制和风格约束
+
 ## 目录结构（核心）
 
 ```
@@ -72,30 +98,43 @@ tft_module/
 ├─ warm_start_train.py           # Warm-start 微调
 ├─ experts/
 │  └─ Z-Combiner/
-│       ├─ model_config.yaml     # Z 层训练配置（示例）
+│       ├─ model_config.yaml     # Z 层训练配置
 │       └─ train_z.py            # OOF → Stacking 训练脚本
+├─ configs/experts/              # 专家配置体系
+│   ├─ Alpha-Dir-TFT/
+│   │   ├─ 1h/base/             # 1小时基础模态
+│   │   ├─ 1h/rich/             # 1小时丰富模态
+│   │   ├─ 1h/comprehensive/    # 1小时完整模态
+│   │   ├─ 4h/...               # 4小时各模态
+│   │   ├─ 1d/...               # 1天各模态
+│   │   └─ datasets/            # 数据集配置
+│   └─ [其他8个专家]/
 ├─ models/
 │  └─ tft_module.py              # MyTFTModule + HybridMultiLoss
 ├─ pipelines/
 │  ├─ build_oof_for_z.py         # 汇总专家输出生成 z_train.parquet
 │  └─ configs/
-│       └─ fuse_fundamentals.yaml  # 数据融合（Fundamentals + On-chain）配置
+│       ├─ fuse_fundamentals.yaml    # 数据融合配置
+│       └─ feature_selection.yaml    # 特征筛选配置
 ├─ features/
-│  └─ regime_core.py             # Regime 核心特征计算
+│  ├─ regime_core.py             # Regime 核心特征计算
+│  └─ selection/                 # 特征筛选管线
 ├─ metrics/
 │  └─ calibration.py             # 温度缩放 / ECE / Brier / Reliability
 ├─ utils/
 │  ├─ eval_report.py             # per-symbol × period 指标汇总
 │  ├─ audit_no_leakage.py        # OOF 数据检查
 │  ├─ mp_start.py                # Windows 多进程启动补丁
-│  └─ ...                        # loss_factory / metric_factory 等
+│  └─ ...                        # 其他工具函数
 ├─ scripts/
 │  ├─ dump_batch.py              # 调试 DataLoader batch
-│  └─ experts_cli.py             # 按专家快速启动（train/resume/warm）
+│  ├─ experts_cli.py             # 按专家快速启动
+│  └─ [其他辅助脚本]
 └─ data/
-   └─ merged/
-        ├─ full_merged.csv        # 基础 K 线 + 技术指标
-        └─ expert_group/          # 每个专家（base|rich）融合结果
+   ├─ merged/
+   │   ├─ full_merged.csv           # 基础 K 线 + 技术指标
+   │   └─ expert_group/             # 按专家分组的融合数据
+   └─ [其他数据目录]
 ```
 
 `data/merged/expert_group/` 是融合脚本的主要输出目录，运行后会为每位专家生成 `<Expert>_base/` 与 `<Expert>_rich/` 两套数据集：
@@ -110,33 +149,43 @@ tft_module/
 ## 专家训练流程
 
 1. **准备数据**：
-   - 按 `src/` 流水线或自有方式生成长表 `data/pkl_merged/full_merged.pkl`（可包含技术、链上、衍生品等特征 + `target_*` 标签）。
-   - 确保列包含 `symbol`、`period`、`time_idx` 以及需要的特征 / 目标。
+   - 确保基础数据 `data/merged/full_merged.csv` 包含所有必要的价量、技术指标和目标列
+   - 通过融合流程生成专家专用数据集：`data/merged/expert_group/<Expert>_{base|rich|comprehensive}/`
+   - 确保数据包含 `symbol`、`period`、`time_idx` 等必要列
 
-2. **选择叶子配置**：
-   - 每个专家 × 周期 × 模态都有独立目录 `configs/experts/<Expert>/<period>/<modality>/`，需要同时提供 `model_config.yaml` 与 `targets.yaml`。
-   - 叶子配置可继承 `schema_version/data_version/expert_version/train_window_id` 等元信息（默认可留空）。
+2. **专家配置**：
+   - 每个专家在 `configs/experts/<Expert>/datasets/` 下配置 base/rich/comprehensive 数据集
+   - 每个训练任务在 `configs/experts/<Expert>/<period>/<modality>/` 下自包含完整配置
+   - 支持 pinned_features 定义每位专家的默认保留特征
 
 3. **启动训练**：
    ```bash
+   # 训练指定专家和配置
    python train_multi_tft.py --config configs/experts/Alpha-Dir-TFT/1h/base/model_config.yaml
-   # 续训 / 热启动同理：
+
+   # 续训（从最近checkpoint恢复）
    python train_resume.py --config configs/experts/Alpha-Dir-TFT/1h/base/model_config.yaml
+
+   # Warm-start微调（从预训练权重开始）
    python warm_start_train.py --config configs/experts/Alpha-Dir-TFT/1h/base/model_config.yaml
+
+   # 使用CLI工具快速启动
+   python scripts/experts_cli.py train --expert Alpha-Dir-TFT --leaf 1h/base
    ```
 
-4. **日志与 checkpoint**：
+4. **训练产物**：
    - 日志：`lightning_logs/experts/<expert>/<period>/<modality>/tft/`
    - 权重：`checkpoints/experts/<expert>/<period>/<modality>/tft/`
-   - 默认保存 top-k 与 `last.ckpt`
+   - 预测：`predictions/predictions_<expert>_<period>_<timestamp>.parquet`
+   - 自动保存 top-k 和 `last.ckpt`
 
 ## 预测契约与评估
 
-- `predict_step` 输出：
+- **标准化输出格式**：
   ```python
   {
-      'score': tensor[B, T],
-      'uncertainty': tensor[B, T],  # 回归: σ，分类: NaN
+      'score': tensor[B, T],           # 预测分数/概率
+      'uncertainty': tensor[B, T],     # 不确定性（回归: σ，分类: NaN）
       'meta': {
           'symbol_idx', 'period_idx', 'time_idx',
           'head_scale', 'head_bias'
@@ -145,46 +194,81 @@ tft_module/
       'antilog_return', 'future_price'
   }
   ```
-- `on_predict_epoch_end` 汇总所有 batch 写入 parquet（默认在当前 lightning log 目录的 `predictions/`）。
-- 验证阶段自动：
-  - 进行温度缩放，记录 `val_ece@target`、`val_brier@target`；
-  - 计算 P10/P50/P90 覆盖率（与 σ 推导的大致区间对齐）；
-  - 输出 Pinball Loss（综合、P10、P90）到日志与 CSV；
-  - 生成 per-symbol × period 汇总表 `eval_report_*.csv` 并写入 TensorBoard。
 
-## OOF ↦ Z 层训练
+- **自动校准与评估**：
+  - 温度缩放：优化预测概率分布
+  - 可靠性指标：ECE、Brier分数、P10/P50/P90覆盖率
+  - 分位数损失：Pinball Loss评估预测区间质量
+  - 分币种×周期汇总：`eval_report_*.csv` 详细评估报告
+
+- **预测数据管理**：
+  - 自动写入 parquet 格式：`predictions/predictions_<expert>_<period>_<timestamp>.parquet`
+  - 包含完整的元信息：符号、周期、时间索引、模型版本等
+  - 支持批量预测和增量更新
+
+## OOF集成与Z层训练
 
 1. **收集专家预测**：
-   - 确保各专家在预测模式或验证过程中产生 `predictions_*.parquet`（目录结构：`lightning_logs/experts/<expert>/<period>/<modality>/tft/predictions/`）。
+   - 各专家训练完成后自动生成预测文件：`lightning_logs/experts/<expert>/<period>/<modality>/tft/predictions/`
+   - 包含标准化的预测分数、不确定性和元信息
 
-2. **构建 OOF 数据集**：
+2. **构建OOF数据集**：
    ```bash
-   python pipelines/build_oof_for_z.py        --predictions-root lightning_logs        --data-path data/pkl_merged/full_merged.pkl        --output datasets/z_train.parquet
+   python pipelines/build_oof_for_z.py \
+       --predictions-root lightning_logs \
+       --data-path data/merged/expert_group/full_merged.pkl \
+       --output datasets/z_train.parquet
    ```
-   - 脚本会校验所有预测文件的版本字段一致，并自动并入 Regime 特征。
+   - 自动校验版本一致性，合并Regime特征和专家预测
 
-3. **无泄漏审计**：
+3. **数据质量审计**：
    ```bash
    python utils/audit_no_leakage.py --path datasets/z_train.parquet
    ```
-   - 检查重复、时间倒退、间隔超阈值、缺失等风险；PASS 后再进入下一步。
+   - 检查时序一致性、重复数据、异常间隔等潜在泄露风险
 
-4. **训练 Z-Combiner**：
+4. **训练Z-Combiner**：
    ```bash
    python experts/Z-Combiner/train_z.py --config experts/Z-Combiner/model_config.yaml
    ```
-   - 支持分类 / 回归模式：默认使用 LogisticRegression / MLPRegressor；
-   - 自动与“等权”“单最佳专家”基线比较 PR-AUC / ECE（分类）或 RMSE（回归），结果落地 `lightning_logs/experts/Z-Combiner/metrics_*.json`。
+   - 支持多种融合策略：规则加权、Stacking元学习、动态门控
+   - 自动与"等权"和"单最佳专家"基线对比
+   - 输出详细评估报告：`lightning_logs/experts/Z-Combiner/metrics_*.json`
 
-## 辅助脚本
+## 辅助工具
 
-- `scripts/dump_batch.py`：启动前设置 `PYTHONPATH` 指向项目根，可快速打印一个验证 batch 的张量形状。
-- `utils/mp_start.py`：内部在各训练脚本入口调用，确保 Windows 启动多进程 DataLoader 时不报错。
-- `scripts/experts_cli.py`：
+### 核心辅助脚本
+- **`scripts/dump_batch.py`**：调试DataLoader，打印batch张量形状和数据格式
+- **`utils/mp_start.py`**：Windows多进程启动补丁，确保DataLoader正常工作
+- **`scripts/experts_cli.py`**：专家训练CLI工具
   ```bash
+  # 列出所有可用配置
   python scripts/experts_cli.py list
+
+  # 训练指定专家配置
   python scripts/experts_cli.py train --expert Alpha-Dir-TFT --leaf 1h/base
+
+  # 续训
+  python scripts/experts_cli.py resume --expert Alpha-Dir-TFT --leaf 1h/base
+
+  # Warm-start微调
+  python scripts/experts_cli.py warm --expert Alpha-Dir-TFT --leaf 1h/base
   ```
+
+### 数据处理工具
+- **`src/build_full_merged.py`**：一键构建完整的技术面数据集
+  ```bash
+  python src/build_full_merged.py --periods 1h,4h,1d
+  ```
+
+### 特征筛选工具
+- **`pipelines/run_feature_screening.py`**：运行完整的特征筛选管线
+- **`features/selection/tft_gating.py`**：导出TFT变量选择网络重要度
+
+### 评估与监控工具
+- **`utils/eval_report.py`**：生成分币种×周期的详细评估报告
+- **`metrics/calibration.py`**：模型校准和可靠性评估工具
+- **`utils/audit_no_leakage.py`**：时序数据泄露审计工具
 
 ### 一键构建 full_merged.csv（技术面扩展后）
 
@@ -210,61 +294,152 @@ python src/build_full_merged.py --periods 1h,4h # 仅 1h 与 4h
 - **OOF 数据列缺失**：确保传入的 `full_merged.pkl` 包含所有 `target_*` 列，并且最新预处理已对慢频特征做 shift/ffill。
 - **Z-Combiner 指标不升**：可在配置中增减 `feature_prefixes`、替换模型（例如换成 `Ridge`、`GradientBoosting` 等），或针对分类任务追加更多校准步骤。
 
-## 快速上手（完整流程）
+## 快速上手指南
 
-以下步骤将项目从数据准备、专家训练到多专家融合串联起来，帮助新同事快速跑通：
+### 完整工作流（数据准备 → 专家训练 → 融合）
 
 1. **准备基础数据**
-   - 确保 `data/pkl_merged/full_merged.pkl`、`data/merged/full_merged.csv` 已包含核心价量、技术指标与目标列。
-   - 若需要生成或更新基础数据，可先运行你们的 ETL/特征工程脚本（详见 `src/` 中的数据处理流程）。
-
-2. **融合基本面 / 链上数据**
-   - 根据专家需求编辑 `configs/experts/<Expert>/datasets/{base,rich}.yaml`（控制 `include_symbol` / `include_global` / 裁剪策略），`pipelines/configs/fuse_fundamentals.yaml` 负责引用这些文件。
-   - 执行：
-     ```bash
-     python -c "from src.fuse_fundamentals import run_with_config; run_with_config('pipelines/configs/fuse_fundamentals.yaml')"
-     ```
-   - 输出会落在 `data/merged/expert_group/<Expert>_{base|rich}/`；检查 `dataset_group_summary.csv`、`fuse_audit/` 以确认覆盖率与裁剪情况。
-
-3. **配置专家训练**
-   - 为每位专家在 `configs/experts/<Expert>/<period>/<modality>/` 下准备好 `model_config.yaml`、`targets.yaml`、`weights_config.yaml`。
-   - 训练脚本直接读取叶子 `targets.yaml` / `weights_config.yaml`，默认不再依赖根目录的旧版配置；需要迁移或复用权重时，修改叶子下的 `weights_config.yaml` 即可。
-
-4. **启动训练 / 续训 / 热启动**
    ```bash
-   python train_multi_tft.py --config configs/experts/Risk-TFT/1h/base/model_config.yaml
-   python train_resume.py    --config configs/experts/Risk-TFT/1h/base/model_config.yaml
-   python warm_start_train.py --config configs/experts/Risk-TFT/1h/rich/model_config.yaml
+   # 构建完整技术面数据集
+   python src/build_full_merged.py --periods 1h,4h,1d
    ```
-   - 常用命令可以通过 `scripts/experts_cli.py` 管理（`list`、`train`、`resume`、`warm`）。
 
-5. **生成预测与 OOF 数据**
-   - 训练完成后运行 `Trainer.predict(...)` 或 CLI 中的预测命令，使 `lightning_logs/experts/.../predictions/` 目录生成 `predictions_*.parquet`。
-   - 汇总 OOF：
-     ```bash
-     python pipelines/build_oof_for_z.py --predictions-root lightning_logs \
-       --data-path data/pkl_merged/full_merged.pkl --output datasets/z_train.parquet
-     python utils/audit_no_leakage.py --path datasets/z_train.parquet
-     ```
+2. **融合专家数据**
+   ```bash
+   # 为所有专家生成专用数据集
+   python -c "from src.fuse_fundamentals import run_with_config; run_with_config('pipelines/configs/fuse_fundamentals.yaml')"
+   ```
 
-6. **训练 Z-Combiner / Stack 模型**
+3. **特征筛选（可选）**
+   ```bash
+   # 运行完整特征筛选管线
+   python -m pipelines.run_feature_screening --config pipelines/configs/feature_selection.yaml
+   ```
+
+4. **训练专家模型**
+   ```bash
+   # 使用CLI工具快速启动训练
+   python scripts/experts_cli.py train --expert Alpha-Dir-TFT --leaf 1h/base
+   python scripts/experts_cli.py train --expert Alpha-Ret-TFT --leaf 1h/base
+   python scripts/experts_cli.py train --expert Risk-Prob-TFT --leaf 1h/base
+   # ... 训练其他专家
+   ```
+
+5. **生成预测并构建OOF**
+   ```bash
+   # 各专家预测（训练时自动生成，或单独调用predict）
+   # 构建Z层训练数据
+   python pipelines/build_oof_for_z.py \
+       --predictions-root lightning_logs \
+       --data-path data/merged/expert_group/full_merged.pkl \
+       --output datasets/z_train.parquet
+   ```
+
+6. **训练Z-Combiner**
    ```bash
    python experts/Z-Combiner/train_z.py --config experts/Z-Combiner/model_config.yaml
    ```
-   - 查看 `lightning_logs/experts/Z-Combiner/metrics_*.json`、`predictions/`、`eval_report_*.csv` 评估融合效果。
 
-7. **可选：特征筛选与证据汇总**
-   - 对某些专家跑特征筛选，可使用 `pipelines/configs/feature_selection(.yaml|_quick.yaml)`；对应 `pkl_path` 已指向最新 `expert_group` 数据。
-   - 运行脚本前确认 `aggregation.weights_yaml`、`wrapper` 参数符合资源预算。
+### 新增专家接入流程
 
-整体流程执行完后，你会得到：
-   - 每位专家（base/rich）的最新模型权重与预测；
-   - `datasets/z_train.parquet` 和训练好的 Z-Combiner；
-   - 报表 / 特征证据输出，便于继续分析和调参。
+如需接入新的专家模型：
+
+1. **定义数据集配置**：在 `configs/experts/<NewExpert>/datasets/` 下创建 base/rich/comprehensive 配置
+2. **注册到融合管线**：在 `pipelines/configs/fuse_fundamentals.yaml` 的 `experts_map` 中注册
+3. **配置训练参数**：创建各周期×模态的配置目录和文件
+4. **运行特征筛选**：为新专家运行特征选择管线
+5. **训练模型**：使用标准训练流程训练新专家
+6. **集成到Z层**：将新专家预测纳入Z-Combiner训练
+
+### 预期产出
+- ✅ 9个专业专家模型（各周期×模态完整覆盖）
+- ✅ Z-Combiner智能融合层
+- ✅ 完整的特征证据链和评估报告
+- ✅ 防泄露的数据处理和审计机制
 
 ---
 
 欢迎在此基础上继续扩展：如接入更多专家、引入分位模型或 GNN/LLM 特征等。
+
+---
+
+## 端到端工作流详解
+
+本项目的工作流设计精良，可以清晰地划分为四个主要阶段：**数据准备** -> **特征筛选** -> **配置同步** -> **模型训练**。
+
+### 第一阶段：数据准备 (Data Preparation)
+
+**目标**: 将多种来源的数据融合成一个可供后续所有步骤使用的、大而全的“宽表”。
+
+**核心细节**:
+
+1.  **输入数据源**:
+    *   **技术面数据**: 这通常是基础，包含了各个交易对的 OHLCV（开高低收成交量）等价格信息。
+    *   **链上/基本面数据**: 包括但不限于 ETF 资金流、宏观经济指标、链上活跃地址、持仓量（OI）、资金费率等。这些数据通常是全局性的，不与特定交易对绑定。
+
+2.  **核心脚本与产出**:
+    *   **`src/build_full_merged.py`**:
+        *   **作用**: 这个脚本负责处理最基础的技术面数据，计算各种技术分析指标（TA Features），如 RSI, MACD, Bollinger Bands 等。
+        *   **产出**: 生成一个包含所有交易对、所有时间周期的基础技术指标宽表，通常保存为 `data/merged/full_merged.csv` 或 `.pkl` 文件。
+    *   **`src/fuse_fundamentals.py`**:
+        *   **作用**: 这是数据准备阶段的**关键一步**。它读取上一步生成的 `full_merged.pkl`，然后将**所有**链上数据、宏观数据等全局特征，通过时间戳对齐的方式，**融合**进去。
+        *   **输入**: `data/merged/full_merged.pkl` + 多个链上/基本面数据源。
+        *   **产出**: `data/merged/full_merged_with_fundamentals.pkl`。这个文件是整个项目后续步骤的**唯一数据来源**，它包含了特征筛选和模型训练可能用到的**所有**特征列。
+
+### 第二阶段：特征筛选 (Feature Selection)
+
+**目标**: 针对每一个“专家”模型，从 `full_merged_with_fundamentals.pkl` 这个巨大的特征池中，筛选出最优的特征子集。
+
+**核心细节**:
+
+1.  **输入数据源**:
+    *   **`data/merged/full_merged_with_fundamentals.pkl`**: 特征筛选流程**唯一**的数据输入。所有的筛选操作都是在这个大宽表上进行的。
+
+2.  **核心脚本与逻辑**:
+    *   **入口**: `pipelines/run_feature_screening.py`。
+    *   **配置文件**: `pipelines/configs/feature_selection.yaml`，在这里定义了要为哪些专家、哪些数据集（`base`, `rich`, `comprehensive`）进行筛选。
+    *   **核心流水线**: `features/selection/run_pipeline.py`，它会按顺序执行多个筛选步骤（如过滤法、嵌入法等）。
+
+3.  **产出**:
+    *   `reports/feature_evidence/` 目录下会生成详细的中间结果和最终产出。
+    *   **最关键的产出**: 每个专家、每个数据集类型对应的 `selected_features.txt` 文件（例如：`reports/feature_evidence/Alpha-Dir-TFT/rich/selected_features.txt`）。这个文件**每行包含一个特征名称**，是下一阶段的直接输入。
+
+### 第三阶段：配置同步 (Configuration Synchronization)
+
+**目标**: 将特征筛选的成果（即 `selected_features.txt` 文件）应用到模型训练的配置中，确保数据侧与模型侧完全对齐。
+
+**核心细节**:
+
+1.  **数据配置更新**:
+    *   **需要修改的文件**: `configs/experts/{专家}/datasets/{数据集}.yaml` (例如 `base.yaml`)。
+    *   **操作**: 在这些文件中，添加或更新 `feature_list_path` 参数，使其**精确地指向**第二阶段生成的对应的 `selected_features.txt` 文件的路径。
+
+2.  **训练配置补全**:
+    *   **需要创建的目录**: 对于每个专家现有的**每个时间周期**（如 `1h`, `4h`），如果缺少 `comprehensive` 训练配置目录，就需要创建它。
+    *   **操作**: 以同周期下的 `rich` 目录为模板，将内部的 `model_config.yaml`, `targets.yaml` 等文件**完整地复制**到新建的 `comprehensive` 目录中。
+
+### 第四阶段：模型训练 (Model Training)
+
+**目标**: 使用同步好的配置，启动并完成最终的 TFT 模型训练。
+
+**核心细节**:
+
+1.  **入口脚本**: `train_multi_tft.py`。
+2.  **工作流程**:
+    *   当你运行这个脚本并提供一个配置路径（如 `configs/experts/Alpha-Dir-TFT/1h/comprehensive`）时，它会：
+        1.  读取该路径下的 `model_config.yaml` 和 `targets.yaml`，确定模型超参数和预测目标。
+        2.  根据 `modality_set` (例如 `comprehensive`)，找到并读取对应的**数据配置文件** `configs/experts/Alpha-Dir-TFT/datasets/comprehensive.yaml`。
+        3.  从这个数据配置文件中，读取**`feature_list_path`** 参数，从而获知应该使用哪个特征列表。
+        4.  脚本接着读取这个 `selected_features.txt` 文件，得到一个确切的特征名称列表。
+        5.  **数据加载器 (`data/load_dataset.py`)** 会加载**全局数据源** `data/merged/full_merged_with_fundamentals.pkl`。
+3.  **动态周期筛选**:
+    *   数据加载器会读取 `model_config.yaml` 中的 `period: "1h"` 参数。
+    *   然后，它会从全局数据中**只筛选出 `period` 列等于 "1h" 的那些行**。
+    *   最后，它会从这些筛选过的数据行中，再根据 `selected_features.txt` **只抽取出需要的特征列**。
+    *   经过这两层筛选的、纯净的数据才会被送入模型进行训练，确保了模型训练的**周期特异性**和**特征准确性**。
+
+---
+
 ## 特征筛选使用教程（Feature Selection）
 
 本项目提供端到端的特征筛选管线，包含：
@@ -337,6 +512,27 @@ python -m features.selection.tft_gating --ckpt <你的ckpt路径> --out reports/
 
 ### 结果产出
 
+<br>
+
+#### 产出目录结构解读 (`reports/feature_evidence/`)
+
+`reports/feature_evidence` 目录为每位专家保存了从特征输入到最终筛选结果的完整证据链。理解其结构有助于评估特征的有效性和筛选过程的合理性。以下表格对一个典型专家目录（如 `Alpha-Dir-TFT/`）下的文件和目录进行了解析。
+
+| 分类 | 文件 / 目录名 | 意义和作用 |
+| :--- | :--- | :--- |
+| **输入配置** | `allowlist_*.txt`, `core_allowlist.txt` | **特征白名单**：定义了哪些特征可以进入筛选流程。`core`为通用核心特征，带专家名的为该专家专属的额外特征。 |
+| **过程证据** | `base/` 和 `rich/` | **并行筛选策略**：分别代表从“基础特征集”和“丰富特征集”出发的两套独立的、完整的筛选流程。 |
+| | └ `stage1_filter/` | **阶段一：过滤法**。存放基于统计指标（如IC/MI、缺失率、方差）的快速初筛结果和证据。 |
+| | └ `stage2_embedded/` | **阶段二：嵌入法**。存放基于多种模型（如树模型、线性模型）评估特征重要性的详细证据。 |
+| | └ `tree_perm/` | **专项验证：排列重要性**。通过更耗时但更可靠的排列重要性方法，在不同时间周期下验证特征的稳健性。 |
+| **决策汇总** | `aggregated_core.csv` | **聚合评估表**：**最关键的决策依据文件**。它汇总了所有过程证据，为每个特征计算最终综合得分、稳健性和排名。 |
+| **最终产出** | `selected_features.txt` | **最终选定特征集**：**最重要的产出**，基于 `aggregated_core.csv` 的评估生成的默认特征列表，直接用于模型训练。 |
+| | `optimized_features.txt` | **优化特征集**：可能是 `selected_features` 的子集，例如在剔除共线性特征后得到，追求更高的模型效率和鲁棒性。 |
+| | `plus_features.txt` | **增强特征集**：在 `selected_features` 基础上增加了一些有潜力的候选特征，用于实验性或更复杂的模型。 |
+
+<br>
+
+
 - 每位专家/通道的中间产物：
   - `reports/feature_evidence/<Expert>/<base|rich>/stage1_filter/`：
     - `allowlist.txt`：过滤后保留下来的特征
@@ -354,6 +550,55 @@ python -m features.selection.tft_gating --ckpt <你的ckpt路径> --out reports/
   - `configs/selected_features.txt`：训练用清单，已改为“核心集 ∪ 当前专家通道的 pinned 默认集”
   - `plus_features.txt` / `optimized_features.txt`：包装式搜索的增强或优化集合
   - `<Expert>/summary.json`：本次筛选摘要（通道统计、Wrapper 结果、可选的后验验证）
+
+### 新增专家接入（让特征筛选可跑）
+
+1) 在 `configs/experts/<Expert>/datasets/` 新增数据集定义
+
+- `base.yaml`：从最新 `data/merged/full_merged.csv` 构建（技术/价量等全表），`dataset_type: fundamentals_only`。目标列 `target_*` 会随全表一并保留。
+- `rich.yaml`：同样基于最新 `full_merged.csv`，`dataset_type: combined`，并对链上/ETF等 rich 列按 `no_nan_policy(scope: onchain, method: intersect)` 求“最大行交集”。
+- OnChain 专家特别规则：无论 base 还是 rich，筛选只使用链上/ETF特征（技术面不作为候选特征）；但该专家的 `target_*` 列始终保留用于监督。
+
+2) 在 `pipelines/configs/fuse_fundamentals.yaml` 的 `experts_map:` 注册
+
+- 增加 `<Expert>_base: path/to/configs/experts/<Expert>/datasets/base.yaml`
+- 增加 `<Expert>_rich: path/to/configs/experts/<Expert>/datasets/rich.yaml`
+
+3) 执行融合，生成专家视图
+
+```bash
+python -c "from src.fuse_fundamentals import run_with_config; run_with_config('pipelines/configs/fuse_fundamentals.yaml')"
+```
+
+4) 在 `pipelines/configs/feature_selection.yaml` 的 `experts:` 注册该专家（双通道）
+
+```yaml
+custom_expert:
+  name:  Custom-Expert
+  pkl_base: data/merged/expert_group/Custom-Expert_base/full_merged_with_fundamentals.pkl
+  pkl_rich: data/merged/expert_group/Custom-Expert_rich/full_merged_with_fundamentals.pkl
+  periods: ["1h", "4h", "1d"]
+  targets: ["target_xxx", "target_yyy"]
+```
+
+5) 运行筛选（单专家示例，自动注入 pinned，训练清单=核心 ∪ pinned）
+
+```bash
+# base
+python -m features.selection.run_pipeline --with-filter --expert-name "Custom-Expert" --channel base --pkl data/pkl_merged/full_merged.pkl
+# rich
+python -m features.selection.run_pipeline --with-filter --expert-name "Custom-Expert" --channel rich --pkl data/pkl_merged/full_merged.pkl
+```
+
+6) 训练（优先使用叶子 `selected_features.txt`）
+
+```bash
+python train_multi_tft.py --config configs/experts/Custom-Expert/1h/base/model_config.yaml
+```
+
+说明：
+- 默认保留字段（pinned）来自 `experts.md`：每位专家在 base/rich 小节写到的字段，都会作为该通道 pinned；rich 的 pinned = base 小节 + rich 小节字段的并集；OHLCV 一并视作 pinned。
+- 筛选 Step1/Step2 不剔除 pinned；最终训练清单 = 聚合核心集 ∪ pinned；每位专家叶子目录会写入其专属 `selected_features.txt`，训练时优先读取该清单。
 
 ### 常见用法
 
