@@ -197,9 +197,14 @@ def main():
     else:
         leaf_weights_yaml = os.path.join(leaf_dir, "weights_config.yaml")
         weight_cfg = load_yaml(leaf_weights_yaml) if os.path.exists(leaf_weights_yaml) else {}
-    sel_feats_path = _find_nearby_config("selected_features.txt", cfg_path, expert_name)
+    # 总是去数据集配置声明的 reports 路径查找 selected 列表；若未声明，再回退到就近 selected_features.txt
+    ds_feature_list_path = dataset_cfg.get("feature_list_path") if isinstance(dataset_cfg, dict) else None
+    if ds_feature_list_path:
+        sel_feats_path = ds_feature_list_path
+    else:
+        sel_feats_path = _find_nearby_config("selected_features.txt", cfg_path, expert_name)
 
-    train_loader, val_loader, target_names, train_ds, periods, norm_pack = get_dataloaders(
+    train_loader, val_loader, target_names, train_ds, periods, norm_pack, features_meta = get_dataloaders(
         data_path=model_cfg["data_path"],
         batch_size=model_cfg.get("batch_size", 64),
         num_workers=model_cfg.get("num_workers", 4),
@@ -212,7 +217,46 @@ def main():
         selected_features_path=sel_feats_path,
         pinned_features_cfg=pinned_features_cfg,
         modality=inferred.get("modality"),
+        # 覆盖 TimeSeriesDataSet 关键长度与标志，允许在 model_config.yaml 中调整
+        max_encoder_length=int(model_cfg.get("max_encoder_length", 36)),
+        max_prediction_length=int(model_cfg.get("max_prediction_length", 1)),
+        add_relative_time_idx=bool(model_cfg.get("add_relative_time_idx", True)),
+        add_target_scales=bool(model_cfg.get("add_target_scales", False)),
+        allow_missing_timesteps=bool(model_cfg.get("allow_missing_timesteps", True)),
+        static_categoricals=model_cfg.get("static_categoricals", ["symbol", "period"]),
+        static_reals=model_cfg.get("static_reals", []),
     )
+    # ===== 打印特征摘要（数量与来源）=====
+    try:
+        allowlist = features_meta.get("selected_allowlist", [])
+        pinned = features_meta.get("pinned_features", [])
+        combined = features_meta.get("combined_features", [])
+        sel_path_used = features_meta.get("selected_path")
+        used_feats = features_meta.get("unknown_reals_after", [])
+        known_reals = features_meta.get("known_reals", [])
+        ds = features_meta.get("dataset_summary", {})
+        used_cols = len(used_feats)
+        # 美化输出，分段打印 + 形状信息
+        print("\n===== Features Summary =====")
+        print(f"[Path] selected_path: {sel_path_used}")
+        print(f"[Counts] pinned={len(pinned)}  selected={len(allowlist)}  combined={len(combined)}  final_used={used_cols}")
+        print("[Pinned]\n  " + ", ".join(pinned))
+        print("[Selected]\n  " + ", ".join(allowlist))
+        print("[Combined]\n  " + ", ".join(combined))
+        print("[Final Used]\n  " + ", ".join(used_feats))
+        print("[Known Reals]\n  " + ", ".join(map(str, known_reals)))
+        # 数据规模与二维形状（行 x 列），列取最终 used 特征数
+        tr_rows = ds.get('train_rows', 'NA')
+        va_rows = ds.get('val_rows', 'NA')
+        print("\n===== Data Summary =====")
+        print(f"[Data] total_rows={ds.get('total_rows', 'NA')}  train_rows={tr_rows}  val_rows={va_rows}")
+        print(f"[Data] train_by_symbol={ds.get('train_by_symbol', {})}")
+        print(f"[Data]  val_by_symbol={ds.get('val_by_symbol', {})}")
+        print(f"[Data] train_by_period={ds.get('train_by_period', {})}")
+        print(f"[Data]  val_by_period={ds.get('val_by_period', {})}")
+        print(f"[Shape] train: {tr_rows} x {used_cols}  |  val: {va_rows} x {used_cols}\n")
+    except Exception as e:
+        print("[warn] failed to print feature summary:", e)
     enc = train_ds.categorical_encoders.get("period", None)
     classes_ = getattr(enc, "classes_", None)
     if classes_ is not None:
@@ -236,14 +280,9 @@ def main():
     out_sizes = [1] * len(target_names)
     cls_keywords = ("binary", "prob", "detect", "outlier")
     cls_targets = [t for t in target_names if any(k in t for k in cls_keywords)]
-    if cls_targets:
-        primary_target = cls_targets[0]
-        monitor_metric = f"val_{primary_target}_ap@{resolved_period}"
-        monitor_mode = 'max'
-    else:
-        primary_target = target_names[0]
-        monitor_metric = f"val_{primary_target}_rmse@{resolved_period}"
-        monitor_mode = 'min'
+    # 训练稳定性优先：仅使用 val_loss 作为监控键，避免分类指标在样本不足时导致早停
+    monitor_metric = "val_loss"
+    monitor_mode = 'min'
 
     output_size_arg = out_sizes[0] if len(out_sizes) == 1 else out_sizes
     model = MyTFTModule(
@@ -253,7 +292,8 @@ def main():
         loss_list=get_losses_by_targets(target_names),
         weights=_resolve_weights(weight_cfg or {}, target_names),
         output_size=output_size_arg,
-        metrics_list=get_metrics_by_targets(target_names, horizons=[str(resolved_period)]),
+        # 禁用所有度量与校准，仅依赖 val_loss 作为监控
+        metrics_list=[],
         target_names=target_names,
         period_map=period_map,
         learning_rate=model_cfg["learning_rate"],
@@ -273,6 +313,7 @@ def main():
         dropout=model_cfg["dropout"],
         log_interval=model_cfg.get("log_interval", 100),
         log_val_interval=model_cfg.get("log_val_interval", 1),
+        enable_calibration=bool(model_cfg.get("enable_calibration", False)),
     )
 
     # ===== 日志 & 回调 =====
@@ -282,6 +323,25 @@ def main():
     log_root = os.path.join("lightning_logs", "experts", exp_name or "default", str(period), str(modality), model_type)
     os.makedirs(log_root, exist_ok=True)
     logger = TensorBoardLogger(log_root, name=model_cfg.get("log_name", "tft_multi"))
+    # 保存特征摘要到日志目录，便于追溯
+    try:
+        os.makedirs(os.path.join(log_root, "configs"), exist_ok=True)
+        feats_out = {
+            "used_features": features_meta.get("unknown_reals_after", []),
+            "used_cols": len(features_meta.get("unknown_reals_after", [])),
+            "selected_allowlist": features_meta.get("selected_allowlist", []),
+            "selected_path": features_meta.get("selected_path"),
+            "pinned_features": features_meta.get("pinned_features", []),
+            "combined_features": features_meta.get("combined_features", []),
+            "known_reals": features_meta.get("known_reals", []),
+            "static_categoricals": features_meta.get("static_categoricals", []),
+            "static_reals": features_meta.get("static_reals", []),
+            "dataset_summary": features_meta.get("dataset_summary", {}),
+        }
+        with open(os.path.join(log_root, "configs", "features_used.yaml"), "w", encoding="utf-8") as f:
+            yaml.safe_dump(feats_out, f, allow_unicode=True)
+    except Exception as e:
+        print("[warn] failed to write features_used.yaml:", e)
     # 监控指标：统一使用验证损失（按你的要求）
     monitor_key = monitor_metric
     monitor_mode = monitor_mode
@@ -325,6 +385,7 @@ def main():
     trainer_kwargs = dict(
         log_every_n_steps=int(model_cfg.get("log_every_n_steps", model_cfg.get("log_interval", 100)) or 100),
         max_epochs=model_cfg["max_epochs"],
+        min_epochs=int(model_cfg.get("min_epochs", 1)),
         accelerator="gpu",
         devices=devices_cfg,
         precision=model_cfg.get("precision", "bf16-mixed"),

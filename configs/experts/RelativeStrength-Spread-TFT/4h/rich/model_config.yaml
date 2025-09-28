@@ -21,7 +21,23 @@ accumulate: 1
 early_stop_patience: 3
 log_name: RelativeStrength-Spread-TFT_4h_rich
 
-loss_schedule:
-  0: [6.0]
-  5: [5.0]
-
+min_epochs: 3
+monitor: val_loss
+devices: 1
+log_interval: 100
+log_val_interval: 1
+log_every_n_steps: 100
+schema_version: schema_v1
+data_version: data_unknown
+expert_version: expert_unknown
+train_window_id: window_unknown
+enable_calibration: false
+max_encoder_length: 36
+max_prediction_length: 1
+add_relative_time_idx: true
+add_target_scales: false
+allow_missing_timesteps: true
+static_categoricals:
+  - symbol
+  - period
+static_reals: []

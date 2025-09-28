@@ -456,3 +456,35 @@
     2.  Dynamically selected alpha features from `selected_features.txt`.
   - This resolves the issue of missing base features during training and aligns the codebase with a more robust, config-driven design, removing the need for manual file copying.
 
+## 2025-09-28 — 训练稳定化与配置集中（val_loss-only + 特征/数据摘要）
+
+### 变更概述
+- 训练稳定化：仅使用 `val_loss` 作为早停/保存监控键；训练期间不再计算 AP/AUC/F1/RMSE 等补充指标，避免小验证窗/单类导致早停或刷屏告警。
+- 校准可控：新增 `enable_calibration` 超参，训练阶段默认关闭校准收集与报表输出；建议训练后离线评估。
+- 验证集稳健：验证 DataLoader `drop_last=False`，避免无 batch 情况。
+- 配置集中化：所有叶子 `model_config.yaml` 统一/新增训练与数据集参数（`monitor: val_loss`、`min_epochs`、`devices`、日志频率、TS 长度与标志、元信息等）；移除历史 `loss_schedule`。
+- 选中特征读取：总是从 `configs/experts/<Expert>/datasets/<base|rich>.yaml` 的 `feature_list_path` 指向的 reports 路径读取；未配置时才回退到叶子 `selected_features.txt`。
+- 特征/数据摘要：训练启动时打印并保存 pinned/selected/combined/final_used 的清单与数量、数据总量与按 `symbol/period` 的分布，以及二维形状（行×列，列=最终 used 特征数）。摘要落盘至 `lightning_logs/.../tft/configs/features_used.yaml`。
+- 学习率调度：仍为 `OneCycleLR`（每步，cos 退火），`max_lr=learning_rate`，`pct_start=0.1`、`div_factor=25`、`final_div_factor=1e4`。
+
+### 影响文件（关键）
+- `train_multi_tft.py`：仅监控 `val_loss`；`metrics_list=[]`；读取 `datasets` 的 `feature_list_path`；打印/落盘特征与数据摘要；支持从配置覆盖 TS 关键参数与 `enable_calibration`。
+- `data/load_dataset.py`：返回 `features_meta`（pinned/selected/combined/used、dataset_summary 等）；支持 TS 参数覆盖；验证集 `drop_last=False`（此前已改）。
+- `models/tft_module.py`：新增 `enable_calibration` 超参；按开关收集/输出校准与报表。
+- `configs/experts/**/model_config.yaml`：批量追加 `monitor: val_loss`、`min_epochs`、`devices`、日志频率、TS 参数、元信息、`enable_calibration`；移除 `loss_schedule`。
+- `README.md`：新增“训练稳定化与配置集中”与“离线评估（预告）”说明。
+
+### 兼容性
+- 按币种仿射头（per_symbol_affine）保留，不受影响。
+- 补充指标/校准迁移为“离线评估”，训练稳定性更好；需要时可通过开关/脚本恢复。
+
+### 离线评估（预告/引子）
+预留脚本入口，后续提供实现：
+```bash
+python scripts/offline_eval.py \
+  --predictions lightning_logs/experts/<expert>/<period>/<modality>/tft/predictions/*.parquet \
+  --targets-pkl data/pkl_merged/full_merged_{base|rich}.pkl \
+  --metrics ap,roc,rmse,mae --calibration temperature
+```
+功能：计算 AP/ROC-AUC/F1/RMSE/MAE，温度缩放校准并输出 ECE/Brier 与可靠性曲线，生成 `eval_report_*.csv`。
+

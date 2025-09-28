@@ -78,6 +78,7 @@ class MyTFTModule(LightningModule):
         data_version: str | None = None,
         expert_version: str | None = None,
         train_window_id: str | None = None,
+        enable_calibration: bool = False,
         **tft_kwargs,
     ):
         super().__init__()
@@ -97,6 +98,7 @@ class MyTFTModule(LightningModule):
             "data_version": data_version,
             "expert_version": expert_version,
             "train_window_id": train_window_id,
+            "enable_calibration": enable_calibration,
         })
         self.target_names = target_names or []
         self.loss_schedule = loss_schedule or {}
@@ -123,6 +125,7 @@ class MyTFTModule(LightningModule):
         self.calibration_temperature = {}
         self.output_head_cfg = output_head_cfg or {}
         self.symbol_weight_cfg = symbol_weight_map or {}
+        self.enable_calibration = bool(enable_calibration)
         self.head_type = str(self.output_head_cfg.get("type", "shared")).lower()
         self.head_apply_on = str(self.output_head_cfg.get("apply_on", "both")).lower()
         reg_cfg = (self.output_head_cfg.get("regularization") or {})
@@ -167,6 +170,8 @@ class MyTFTModule(LightningModule):
 
         self.metrics_list = nn.ModuleList([m for _, m in metrics_list])
         self.metric_names = [n for n, _ in metrics_list]
+        # 记录每个度量在本轮验证中累计的样本数（用于避免空样本 compute 告警）
+        self.metric_update_counts = {n: 0 for n in self.metric_names}
         self.metric_target_idx = [
             next(i for i, t in enumerate(self.target_names)
                  if n.split("@")[0].startswith(t + "_") or n.startswith(t + "_"))
@@ -429,6 +434,11 @@ class MyTFTModule(LightningModule):
 
     def validation_step(self, batch, batch_idx):
         total, preds, y_enc, x, sym_idx, per_idx = self._shared_step(batch, "val")
+        # 记录一个稳定存在的验证损失，便于 EarlyStopping 监控与排错
+        try:
+            self.log("val_loss", total, on_step=False, on_epoch=True, prog_bar=True, logger=True)
+        except Exception:
+            pass
         preds_eval, y_eval = self._destandardize_pred_and_true(preds, y_enc, sym_idx, per_idx)
         period_idx = x["groups"][:, self.period_group_idx].to(self.device)
         for idx, metric in enumerate(self.metrics_list):
@@ -440,6 +450,11 @@ class MyTFTModule(LightningModule):
             mask = (period_idx == pid)
             if not mask.any():
                 continue
+            # 累加本轮该度量的有效样本数
+            try:
+                self.metric_update_counts[name] += int(mask.sum().item())
+            except Exception:
+                pass
             col = self.metric_target_idx[idx]
             if self.metric_is_cls[idx]:
                 prob = torch.sigmoid(preds[mask, col])
@@ -449,7 +464,8 @@ class MyTFTModule(LightningModule):
                     self.confmats[name].update((prob > 0.5).int(), t)
             else:
                 metric.update(preds_eval[mask, col], y_eval[mask, col])
-        self._collect_validation_outputs(preds, preds_eval, y_enc, y_eval, sym_idx, per_idx, x)
+        if self.enable_calibration:
+            self._collect_validation_outputs(preds, preds_eval, y_enc, y_eval, sym_idx, per_idx, x)
         return total
 
     def on_validation_epoch_end(self):
@@ -457,14 +473,33 @@ class MyTFTModule(LightningModule):
         for name, metric in zip(self.metric_names, self.metrics_list):
             val = float('nan')
             try:
-                # compute() can fail if validation batch has only one class for AP/AUC
-                val = metric.compute()
+                # 仅当本轮该度量收到了样本时才 compute，避免空样本告警
+                if self.metric_update_counts.get(name, 0) > 0:
+                    val = metric.compute()
             except (ValueError, RuntimeError) as e:
-                self.print(f"Warn: could not compute metric '{name}': {e}")
+                msg = str(e)
+                quiet_patterns = (
+                    "No samples to concatenate",
+                    "does not have any samples",
+                    "not enough positive",
+                    "Only one class present",
+                )
+                if not any(p in msg for p in quiet_patterns):
+                    self.print(f"Warn: could not compute metric '{name}': {e}")
 
             # Log NaN if computation fails; EarlyStopping handles this gracefully
             self.log(f"val_{name}", val, on_epoch=True, prog_bar=True)
             metric.reset()
+
+            # 记录本轮该度量的样本数，便于排查
+            try:
+                self.log(f"samples_{name}", float(self.metric_update_counts.get(name, 0)), on_epoch=True, prog_bar=False)
+            except Exception:
+                pass
+
+        # 清零计数，进入下一轮
+        for k in list(self.metric_update_counts.keys()):
+            self.metric_update_counts[k] = 0
 
         for tag, cm in self.confmats.items():
             try:
@@ -480,7 +515,8 @@ class MyTFTModule(LightningModule):
                 plt.close(fig)
             cm.reset()
 
-        self._log_validation_calibration_and_reports()
+        if self.enable_calibration:
+            self._log_validation_calibration_and_reports()
 
     def on_train_epoch_start(self):
         if self.current_epoch in self.loss_schedule:

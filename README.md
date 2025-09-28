@@ -2,6 +2,101 @@
 
 多目标 Temporal Fusion Transformer (TFT) 项目，面向加密货币 / 股票等金融时间序列的多周期、多任务预测。项目采用9+1专家架构，包含Alpha-Dir、Alpha-Ret、Risk-Prob、Risk-Reg、MicroStruct-Deriv、OnChain-ETF、Regime-Gate、RelativeStrength-Spread、Factor-Bridge等9个专业专家模型，以及一个Z-Combiner融合层。
 
+## 端到端命令速查（从采集 → 融合 → 筛选 → 训练）
+
+1) 采集与准备（API → 原始数据）
+- 衍生品/链上指标（时间段、币种、周期可配）
+  ```bash
+  # 例：按时间范围与币种抓取 1d 指标
+  python src/apied.py --start 2020-10-02 --end 2025-12-18 \
+    --symbols BTC,ETH,SOL,BNB,ADA --interval 1d
+  ```
+  参数（来自实际代码 src/apied.py）
+  - `--symbols`：逗号分隔，默认 `BTC,ETH,SOL,BNB,ADA`
+  - `--interval`：`1h|4h|1d`，默认 `1d`
+  - `--limit`：单次 API 上限，默认 `4500`
+  - `--pause`：每次调用后的 sleep 秒数，默认 `1.0`
+  - `--start`：起始时间；支持 13 位毫秒 / 10 位秒 / `YYYY-MM-DD` / `YYYYMMDD` / ISO8601 / `now`，默认 `2020-10-01`
+  - `--end`：终止时间；同上，默认 `now`
+- OHLCV/K线（编辑 `src/ccatch.py` 顶部常量后运行）
+  ```bash
+  python src/ccatch.py
+  ```
+  关键常量（来自实际代码 src/ccatch.py 顶部）
+  - `BASE_SYMBOLS=['BTC/USDT','ETH/USDT','SOL/USDT','BNB/USDT','ADA/USDT']`
+  - `TIMEFRAMES=['1h','4h','1d']`
+  - `SINCE_STR='2020-10-01T00:00:00Z'`、`LIMIT=1500`、`PRICE_MODE='trade'`、`EXCHANGE_TYPE='usdm'`
+  - 输出目录：`data/crypto/<symbol>/<timeframe>/...csv`（按脚本内部组织）
+
+2) 构建技术面与目标（full_merged.csv）
+```bash
+python src/build_full_merged.py --periods 1h,4h,1d
+# 输出：data/merged/full_merged.csv 与 data/merged/full_merged.pkl
+```
+  参数（来自实际代码 src/build_full_merged.py）
+  - `--periods`：空格或逗号分隔，默认 `1h 4h 1d`（PowerShell 建议加引号，如 `'1h,4h,1d'`）
+  - `--indicated-root`：技术面输入根目录，默认 `data/crypto_indicated`
+  - `--targeted-root`：目标输出根目录，默认 `data/crypto_targeted_and_indicated`
+  - `--merged-out`：最终合并 CSV 路径，默认 `data/merged/full_merged.csv`
+
+3) 融合 Base/Rich（生成 full_merged_with_fundamentals.csv 及专家分组视图）
+```bash
+python -c "from src.fuse_fundamentals import run_with_config; \
+  run_with_config('pipelines/configs/fuse_fundamentals.yaml')"
+# 关键配置：pipelines/configs/fuse_fundamentals.yaml
+# 输出：
+# - data/merged/full_merged_with_fundamentals.{csv,pkl}
+# - data/merged/expert_group/<Expert>_{base|rich}/full_merged_with_fundamentals.{csv,pkl}
+```
+  说明（来自实际代码 src/fuse_fundamentals.py 与 datasets 配置）
+  - `configs/experts/<Expert>/datasets/{base,rich}.yaml`：
+    - `pinned_features`：默认保留特征
+    - `feature_list_path`：筛选特征清单路径（固定指向 `reports/feature_evidence/.../selected_features.txt`）
+    - `include_symbol/include_global`：Rich 模块选择开关
+
+4) 特征筛选（reports/feature_evidence + selected_features.txt）
+```bash
+# 跑全部或指定专家（--experts）
+python -m pipelines.run_feature_screening --config pipelines/configs/feature_selection.yaml
+# 产物：reports/feature_evidence/<Expert>/<base|rich>/selected_features.txt
+# 训练将固定从 datasets/<base|rich>.yaml 的 feature_list_path 指向的 reports 路径读取
+```
+
+5) 开始训练（按专家/周期/模态）
+```bash
+# 列出叶子配置
+python scripts/experts_cli.py list
+
+# 训练 / 续训 / 热启动（示例：Alpha-Dir-TFT 的 4h/base）
+python scripts/experts_cli.py train  --expert Alpha-Dir-TFT --leaf 4h/base
+python scripts/experts_cli.py resume --expert Alpha-Dir-TFT --leaf 4h/base
+python scripts/experts_cli.py warm   --expert Alpha-Dir-TFT --leaf 4h/base
+```
+- 训练配置：`configs/experts/<Expert>/<period>/<modality>/model_config.yaml`
+  - 关键字段：`batch_size, learning_rate, max_epochs, min_epochs, devices, monitor=val_loss,` 以及
+    `max_encoder_length, max_prediction_length, add_relative_time_idx, allow_missing_timesteps` 等。
+- 目标与输出头：`configs/experts/<Expert>/<period>/<modality>/targets.yaml`
+  - 例如 `targets: [target_binarytrend]`、`output_head: { type: per_symbol_affine, apply_on: logits }`
+- 数据集 pinned/selected：`configs/experts/<Expert>/datasets/{base,rich}.yaml`
+  - `pinned_features` 默认特征；`feature_list_path` 指向 `reports/feature_evidence/.../selected_features.txt`
+
+6) 训练后（可选）构建 OOF 与 Z 层训练数据
+```bash
+python pipelines/build_oof_for_z.py \
+  --predictions-root lightning_logs \
+  --data-path data/merged/expert_group/full_merged.pkl \
+  --output datasets/z_train.parquet
+```
+
+7) 离线评估（预告）
+```bash
+# 计划中的离线评估脚本（后续提供）
+python scripts/offline_eval.py \
+  --predictions lightning_logs/experts/<expert>/<period>/<modality>/tft/predictions/*.parquet \
+  --targets-pkl data/pkl_merged/full_merged_{base|rich}.pkl \
+  --metrics ap,roc,rmse,mae --calibration temperature
+```
+
 ## 最新亮点（v0.2.8）
 
 - **专家体系完整实现**：9+1专家架构全面落地，涵盖方向预测、收益回归、风险评估、微观结构、链上数据、市场体制、关键位突破、相对强弱、因子桥接等全领域专业能力
@@ -288,6 +383,8 @@ python src/build_full_merged.py --periods 1h,4h # 仅 1h 与 4h
 注意：`beta_btc_60d` 与 `volume_profile_hvn/lvn` 暂留于融合阶段或专用模块实现。
 
 ## 常见问题
+
+- 训练指标/校准暂时关闭：为避免在小验证窗或极端不平衡时 AP/ROC-AUC 等指标在某些周期出现“无样本/单类”而导致早停或日志告警，当前默认仅记录并监控 `val_loss`（EarlyStopping/Checkpoint 也基于 `val_loss`）。原有分类/回归指标与概率校准（温度缩放、ECE、Brier、可靠性曲线）已在训练阶段禁用，后续待稳定后再按需恢复；如需查看效果，可在训练完成后离线评估。
 
 - **预测 parquet 不生成**：确认已运行 `Trainer.predict(...)` 或在验证结束后调用了 `trainer.predict(...)`。
 - **校准指标全为 NaN**：检查对应目标是否有正样本 / 负样本，或是否误把回归目标当分类使用。
@@ -625,6 +722,35 @@ python train_multi_tft.py --config configs/experts/Custom-Expert/1h/base/model_c
 - 时间置换不确定度：`tree_perm` 输出 `perm_std`、`perm_ci95_low/high`，并记录 `block_len/embargo/purge`。
 - 跨 era 出现率过滤：在聚合中可设置 `aggregation.min_appear_rate_era`，需要 `era` 列（tree_perm 已尝试写入年份）。
 - GA 多 seed：在 `wrapper.ga.seeds` 提供多 seed 时，自动多次运行并输出 `ga_gene_frequency.csv`。
-- RFE 近似器：RFE 使用 LightGBM/CB/XGB 作为近似器，降低耗时；仍使用统一评估函数确保一致。
-- Base/Rich 融合质量权重：`aggregation.rich_quality_weights` 可按 period 缩放 Rich 权重，缓解低覆盖“伪优”。
-- 前瞻对照：`finalize.forward_compare.enabled` 开启后，会输出 `forward_eval.csv`（subset vs full）。
+ - RFE 近似器：RFE 使用 LightGBM/CB/XGB 作为近似器，降低耗时；仍使用统一评估函数确保一致。
+ - Base/Rich 融合质量权重：`aggregation.rich_quality_weights` 可按 period 缩放 Rich 权重，缓解低覆盖“伪优”。
+ - 前瞻对照：`finalize.forward_compare.enabled` 开启后，会输出 `forward_eval.csv`（subset vs full）。
+
+## 训练稳定化与配置集中（近期更新）
+
+- 仅 `val_loss` 作为监控键：训练期不再计算 AP/AUC/F1/RMSE 等补充指标，避免因无样本/单类触发早停；验证集 `drop_last=False` 保证小窗也有 batch。
+- 按币种仿射头保留：不影响现有建模（`output_head: { type: per_symbol_affine }`）。
+- 配置集中化：所有叶子 `model_config.yaml` 新增/统一以下字段（无需改代码即可调整）：
+  - 训练器：`monitor: val_loss`、`min_epochs`、`devices`、`log_interval`、`log_val_interval`、`log_every_n_steps`、`precision`、`accumulate` 等。
+  - TS 数据集：`max_encoder_length`、`max_prediction_length`、`add_relative_time_idx`、`add_target_scales`、`allow_missing_timesteps`、`static_categoricals`、`static_reals`。
+  - 元信息：`schema_version`、`data_version`、`expert_version`、`train_window_id`。
+- 特征与数据规模打印 + 落盘：
+  - 启动训练时分段打印：
+    - `[Features]` 默认（pinned）、筛选（selected，固定从 `datasets/<base|rich>.yaml` 的 `feature_list_path` 读取 `reports/feature_evidence/.../selected_features.txt`）、合并（combined）、最终使用（final_used）清单与数量；
+    - `[Data]` 总行数、训练/验证行数，以及按 `symbol/period` 的分布；
+    - `[Shape]` 训练/验证二维形状（行×列，列为最终 used 特征数）。
+  - 同步写入 `lightning_logs/experts/<expert>/<period>/<modality>/tft/configs/features_used.yaml`，便于复盘。
+- 选中特征读取规则：总是从 `configs/experts/<Expert>/datasets/<base|rich>.yaml` 的 `feature_list_path` 指向的 reports 路径读取；若未配置，才回退到叶子目录的 `selected_features.txt`。
+- 学习率调度：仍为 `OneCycleLR`（每步，cos 退火），`max_lr=learning_rate`，其形状参数使用默认（`pct_start=0.1`、`div_factor=25`、`final_div_factor=1e4`）。
+
+### 离线评估（预告）
+- 训练期间不再记录 AP/AUC 等补充指标与概率校准；建议在训练完成后，使用离线脚本进行评估与温度缩放。
+- 预留脚本入口（占位）：
+  ```bash
+  # 计划中的离线评估脚本（后续提供）
+  python scripts/offline_eval.py \
+    --predictions lightning_logs/experts/<expert>/<period>/<modality>/tft/predictions/*.parquet \
+    --targets-pkl data/pkl_merged/full_merged_{base|rich}.pkl \
+    --metrics ap,roc,rmse,mae --calibration temperature
+  ```
+  - 功能：读取预测与目标构建对齐集，计算 AP/ROC-AUC/F1/RMSE/MAE；可选做温度缩放并输出 ECE/Brier 与可靠性曲线；生成 `eval_report_*.csv`。

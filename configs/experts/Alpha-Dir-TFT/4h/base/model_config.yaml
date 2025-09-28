@@ -4,20 +4,40 @@ period: "4h"
 modality_set: base
 
 val_mode: days
+val_ratio: 0.2
 val_days: 252
 
-batch_size: 128
+batch_size: 64
 num_workers: 4
 hidden_size: 128
 lstm_layers: 1
 attention_head_size: 2
 dropout: 0.1
 learning_rate: 1.0e-3
-max_epochs: 40
+max_epochs: 60
+min_epochs: 3
+monitor: val_loss
 precision: "16-mixed"
 grad_clip: 0.2
 accumulate: 1
-early_stop_patience: 3
+early_stop_patience: 5
 log_name: Alpha-Dir-TFT_4h_base
 
-
+devices: 1
+log_interval: 100
+log_val_interval: 1
+log_every_n_steps: 100
+schema_version: schema_v1
+data_version: data_unknown
+expert_version: expert_unknown
+train_window_id: window_unknown
+enable_calibration: false
+max_encoder_length: 42
+max_prediction_length: 1
+add_relative_time_idx: true
+add_target_scales: false
+allow_missing_timesteps: true
+static_categoricals:
+  - symbol
+  - period
+static_reals: []

@@ -74,7 +74,7 @@ def get_dataloaders(
     pinned_features_cfg: Optional[Dict[str, List[str]]] = None,
     modality: Optional[str] = None,
     **kwargs,
-) -> Tuple[DataLoader, DataLoader, List[str], TimeSeriesDataSet, List[str], dict]:
+) -> Tuple[DataLoader, DataLoader, List[str], TimeSeriesDataSet, List[str], dict, dict]:
     # 优先使用传入的 data_path；若不可用则回退到默认 pkl 路径
     default_pkl = "data/pkl_merged/full_merged.pkl"
     use_path = data_path or default_pkl
@@ -145,6 +145,7 @@ def get_dataloaders(
     df.replace({None: np.nan}, inplace=True)
 
 
+    # 候选未知实数特征（在筛选/拼接前的全量候选）
     unknown_reals = [
         c for c in df_train.columns
         if c not in known_reals
@@ -153,15 +154,18 @@ def get_dataloaders(
         and c not in targets
         and not df_train[c].isna().all()
     ]
+    unknown_reals_before = list(unknown_reals)
     sel_path = selected_features_path or os.path.join("configs", "selected_features.txt")
     
-    # 动态筛选的 Alpha 特征
+    # 动态筛选的 Alpha 特征（来自 selected_features.txt）
     allowlist = []
     if sel_path and os.path.exists(sel_path):
         with open(sel_path, "r", encoding="utf-8") as fh:
             allowlist = [ln.strip() for ln in fh if ln.strip() and not ln.strip().startswith("#")]
+    # 记录所用路径，便于排查
+    sel_path_used = sel_path if sel_path and os.path.exists(sel_path) else None
 
-    # 从配置注入的 Pinned 静态特征
+    # 从配置注入的 Pinned 静态特征（数据集配置中的默认字段）
     pinned_features = []
     if pinned_features_cfg and modality:
         pinned_features = pinned_features_cfg.get(modality, [])
@@ -178,6 +182,33 @@ def get_dataloaders(
         available_cols = set(df_train.columns)
         final_features = [f for f in combined_features if f in available_cols]
         unknown_reals = [c for c in unknown_reals if c in final_features]
+    # 汇总特征信息，用于训练阶段打印/落盘
+    features_meta = {
+        "selected_allowlist": allowlist,
+        "selected_path": sel_path_used,
+        "pinned_features": pinned_features,
+        "combined_features": combined_features,
+        "unknown_reals_before": unknown_reals_before,
+        "unknown_reals_after": list(unknown_reals),
+        "known_reals": list(known_reals),
+        "static_categoricals": list(kwargs.get("static_categoricals", ["symbol", "period"]) or ["symbol", "period"]),
+        "static_reals": list(kwargs.get("static_reals", []) or []),
+    }
+    # 数据规模摘要
+    def _vc(dff, col):
+        try:
+            return dff[col].astype(str).value_counts().to_dict()
+        except Exception:
+            return {}
+    features_meta["dataset_summary"] = {
+        "total_rows": int(len(df)),
+        "train_rows": int(len(df_train)),
+        "val_rows": int(len(df_val)),
+        "train_by_symbol": _vc(df_train, "symbol"),
+        "val_by_symbol": _vc(df_val, "symbol"),
+        "train_by_period": _vc(df_train, "period"),
+        "val_by_period": _vc(df_val, "period"),
+    }
 
     symbol_classes = sorted(df_train["symbol"].dropna().unique().tolist())
     period_classes = sorted(df_train["period"].dropna().unique().tolist())
@@ -219,23 +250,32 @@ def get_dataloaders(
         target_normalizer = MultiNormalizer([TorchNormalizer(method="identity", center=False)] * len(targets))
         # 单目标时使用字符串目标，多目标时使用列表
         ts_target = targets
+    # 允许通过可选参数覆盖 TimeSeriesDataSet 关键配置
+    max_encoder_length = int(kwargs.get("max_encoder_length", 36))
+    max_prediction_length = int(kwargs.get("max_prediction_length", 1))
+    add_relative_time = bool(kwargs.get("add_relative_time_idx", True))
+    add_target_scales = bool(kwargs.get("add_target_scales", False))
+    allow_missing = bool(kwargs.get("allow_missing_timesteps", True))
+    static_cats = kwargs.get("static_categoricals", ["symbol", "period"]) or ["symbol", "period"]
+    static_reals_cfg = kwargs.get("static_reals", []) or []
+
     ts_cfg = dict(
         time_idx="time_idx",
         target=ts_target,
         group_ids=["symbol", "period"],
-        max_encoder_length=36,
-        max_prediction_length=1,
-        static_categoricals=["symbol", "period"],
-        static_reals=[],
+        max_encoder_length=max_encoder_length,
+        max_prediction_length=max_prediction_length,
+        static_categoricals=static_cats,
+        static_reals=static_reals_cfg,
         categorical_encoders={
             "symbol": symbol_encoder,
             "period": period_encoder,
         },
         time_varying_known_reals=known_reals,
         time_varying_unknown_reals=unknown_reals,
-        add_relative_time_idx=True,
-        add_target_scales=False,
-        allow_missing_timesteps=True,
+        add_relative_time_idx=add_relative_time,
+        add_target_scales=add_target_scales,
+        allow_missing_timesteps=allow_missing,
         target_normalizer=target_normalizer,
     )
 
@@ -252,6 +292,7 @@ def get_dataloaders(
         prefetch_factor=4,
         drop_last=True,
     )
+    # 验证集不要丢弃最后一个不满批次，避免样本过少时度量器无样本
     val_loader = val_ds.to_dataloader(
         train=False,
         batch_size=batch_size,
@@ -259,6 +300,6 @@ def get_dataloaders(
         persistent_workers=num_workers > 0,
         pin_memory=True,
         prefetch_factor=2,
-        drop_last=True,
+        drop_last=False,
     )
-    return train_loader, val_loader, targets, train_ds, period_classes, norm_pack
+    return train_loader, val_loader, targets, train_ds, period_classes, norm_pack, features_meta
