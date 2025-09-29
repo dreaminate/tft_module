@@ -20,6 +20,12 @@ warnings.filterwarnings(
     category=UserWarning,
     message=".*compute.*before the.*update.*method.*"
 )
+# 屏蔽 PyTorch 1.11+ 中关于 OneCycleLR 的误报
+warnings.filterwarnings(
+    "ignore",
+    category=UserWarning,
+    message=".*Detected call of `lr_scheduler.step()` before `optimizer.step()`.*",
+)
 
 torch.set_float32_matmul_precision('medium')
 torch.backends.cudnn.benchmark = True

@@ -69,7 +69,7 @@ def indicating_main(timeframe="1h"):
     os.makedirs(output_dir, exist_ok=True)
 
     # 4) 滑动窗口（按周期）
-    tf2win = {"1h": 48, "4h": 48, "1d": 48}
+    tf2win = {"1h": 96, "4h": 56, "1d": 30}
     win = tf2win.get(timeframe, 48)
 
     # 4.1 预计算 BTC 基准收益（按当前周期）
@@ -206,11 +206,11 @@ def indicating_main(timeframe="1h"):
         # === F. Tail & Risk ===
         if enabled["tail_risk"]:
             rlog = np.log(df[close_col].replace(0, np.nan)).diff()
-            win = 30 if timeframe != "1d" else 30
-            df["ret_skew_30d"] = rlog.rolling(win, min_periods=10).skew()
-            df["ret_kurt_30d"] = rlog.rolling(win, min_periods=10).kurt()
+            tail_win = 30 if timeframe != "1d" else 30
+            df["ret_skew_30d"] = rlog.rolling(tail_win, min_periods=10).skew()
+            df["ret_kurt_30d"] = rlog.rolling(tail_win, min_periods=10).kurt()
             # VaR / CVaR 粗略近似（历史分位）
-            q = rlog.rolling(win, min_periods=10).quantile(0.05)
+            q = rlog.rolling(tail_win, min_periods=10).quantile(0.05)
             df["var_95_30d"] = q
             # CVaR 近似：低于分位的平均
             def _cvar(x):
@@ -219,7 +219,7 @@ def indicating_main(timeframe="1h"):
                 qv = np.nanquantile(x, 0.05)
                 y = x[x <= qv]
                 return float(y.mean()) if len(y) else np.nan
-            df["cvar_95_30d"] = rlog.rolling(win, min_periods=10).apply(_cvar, raw=False)
+            df["cvar_95_30d"] = rlog.rolling(tail_win, min_periods=10).apply(_cvar, raw=False)
             df["z_score_gap"] = (df["open"] - df["close"].shift(1)) / (df.get("atr", 1.0) + 1e-9)
 
         # === G. 蜡烛型计数（简化版占比/计数） ===

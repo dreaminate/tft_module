@@ -247,38 +247,38 @@ tft_module/
 - `missing_threshold_columns.txt` / `intersect_columns*.txt`：当缺失率阈值或交集策略触发时的列记录。
 - `fuse_audit/`：覆盖率报表、时间审计、列统计；`config_snapshot.yaml` 保存本次融合配置。
 
-## 专家训练流程
+### Alpha-Dir-TFT Pipeline
 
-1. **准备数据**：
-   - 确保基础数据 `data/merged/full_merged.csv` 包含所有必要的价量、技术指标和目标列
-   - 通过融合流程生成专家专用数据集：`data/merged/expert_group/<Expert>_{base|rich|comprehensive}/`
-   - 确保数据包含 `symbol`、`period`、`time_idx` 等必要列
+1. 构建数据（已完成）：
+   - `python src/build_full_merged.py`
+   - `python src/fuse_fundamentals.py`
 
-2. **专家配置**：
-   - 每个专家在 `configs/experts/<Expert>/datasets/` 下配置 base/rich/comprehensive 数据集
-   - 每个训练任务在 `configs/experts/<Expert>/<period>/<modality>/` 下自包含完整配置
-   - 支持 pinned_features 定义每位专家的默认保留特征
-
-3. **启动训练**：
+2. 运行 Alpha-Dir-TFT 特征筛选：
    ```bash
-   # 训练指定专家和配置
-   python train_multi_tft.py --config configs/experts/Alpha-Dir-TFT/1h/base/model_config.yaml
-
-   # 续训（从最近checkpoint恢复）
-   python train_resume.py --config configs/experts/Alpha-Dir-TFT/1h/base/model_config.yaml
-
-   # Warm-start微调（从预训练权重开始）
-   python warm_start_train.py --config configs/experts/Alpha-Dir-TFT/1h/base/model_config.yaml
-
-   # 使用CLI工具快速启动
-   python scripts/experts_cli.py train --expert Alpha-Dir-TFT --leaf 1h/base
+   python pipelines/run_feature_screening.py --experts alpha_dir_tft --enable-base --enable-rich
    ```
 
-4. **训练产物**：
-   - 日志：`lightning_logs/experts/<expert>/<period>/<modality>/tft/`
-   - 权重：`checkpoints/experts/<expert>/<period>/<modality>/tft/`
-   - 预测：`lightning_logs/experts/<expert>/<period>/<modality>/tft/<log_name>/version_*/predictions/*.parquet`
-   - 自动保存 top-k 和 `last.ckpt`
+3. 训练 Alpha-Dir-TFT 模型：
+   - 直接调用训练入口：
+     ```bash
+     python scripts/experts_cli.py train --expert Alpha-Dir-TFT --leaf 1h/base
+     python scripts/experts_cli.py train --expert Alpha-Dir-TFT --leaf 4h/base
+     python scripts/experts_cli.py train --expert Alpha-Dir-TFT --leaf 1d/base
+
+     python scripts/experts_cli.py train --expert Alpha-Dir-TFT --leaf 1h/rich
+     python scripts/experts_cli.py train --expert Alpha-Dir-TFT --leaf 4h/rich
+     python scripts/experts_cli.py train --expert Alpha-Dir-TFT --leaf 1d/rich
+     ```
+   - 或者手动调用 `train_multi_tft.py`：
+     ```bash
+     python train_multi_tft.py --config configs/experts/Alpha-Dir-TFT/1h/base/model_config.yaml
+     python train_multi_tft.py --config configs/experts/Alpha-Dir-TFT/4h/base/model_config.yaml
+     python train_multi_tft.py --config configs/experts/Alpha-Dir-TFT/1d/base/model_config.yaml
+
+     python train_multi_tft.py --config configs/experts/Alpha-Dir-TFT/1h/rich/model_config.yaml
+     python train_multi_tft.py --config configs/experts/Alpha-Dir-TFT/4h/rich/model_config.yaml
+     python train_multi_tft.py --config configs/experts/Alpha-Dir-TFT/1d/rich/model_config.yaml
+     ```
 
 ## 预测契约与评估
 
@@ -382,7 +382,7 @@ python src/build_full_merged.py --periods 1h,4h # 仅 1h 与 4h
 
 流程说明：
 
-- 指标：`indicating_main(tf)` 计算基础 + 扩展技术面（含 Regime/通道/动量/一目/形态/Tail/MFI/CMF/枢轴/时间特征），并对关键列先 `shift(1)` 再归一化（输出 `_zn48/_mm48`）。
+- 指标：`indicating_main(tf)` 计算基础 + 扩展技术面（含 Regime/通道/动量/一目/形态/Tail/MFI/CMF/枢轴/时间特征），并对关键列先 `shift(1)` 再归一化（输出 `_zn96/_mm96`、`_zn56/_mm56`、`_zn30/_mm30` 等，依周期而定）。
 - 目标：`generate_targets_auto.convert_selected_periods_to_csv` 写入 `data/crypto_targeted_and_indicated/<tf>`。
 - 合并：`merged_main` 自动探测币种并输出 `data/merged/full_merged.csv`。
 
@@ -760,3 +760,25 @@ python train_multi_tft.py --config configs/experts/Custom-Expert/1h/base/model_c
   #   --metrics ap,roc,rmse,mae --calibration temperature
   ```
   - 功能：读取预测与目标构建对齐集，计算 AP/ROC-AUC/F1/RMSE/MAE；可选做温度缩放并输出 ECE/Brier 与可靠性曲线；生成 `eval_report_*.csv`。
+
+## FAQ / 常见问题
+
+1.  **特征筛选管线太慢怎么办？**
+    -  `pipelines/configs/feature_selection_quick.yaml` 提供了一个轻量级版本，减少了树模型数量、GA/RFE 迭代次数。
+    -  在 `feature_selection.yaml` 中，可以减少 `tree_perm.params.n_repeats`、`wrapper.ga.n_generations`、`wrapper.rfe.n_features_to_select`。
+    -  确保 `device="cuda"` 以使用 GPU 加速。
+
+2.  **如何新增自定义专家？**
+    -  请参考 `experts.md` 中的“专家接入指南”与 `README.md` 的“新增专家接入”章节。
+
+3.  **训练时出现 `lr_scheduler.step()` 在 `optimizer.step()` 之前的警告？**
+    -  这是一个在 PyTorch Lightning 中使用 `OneCycleLR` 时已知的、无害的“误报”警告。Lightning 框架在后台保证了正确的调用顺序。
+    -  为了保持日志整洁，这个警告已被主动屏蔽，不影响实际训练效果。
+
+## 历史版本亮点
+### 2025-09-28 — 专家体系全面升级与9+1架构完整实现（v0.2.8）
+#### 专家架构全面升级
+
+```
+
+```

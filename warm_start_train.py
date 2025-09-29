@@ -5,6 +5,7 @@ if __name__ == "__main__":
     import yaml
     import torch
     import argparse
+    import warnings
     from lightning.pytorch import Trainer
     from models.tft_module import MyTFTModule
     from data.load_dataset import get_dataloaders
@@ -18,6 +19,16 @@ if __name__ == "__main__":
     # 修正导入：项目内工具位于 utils.run_helper
     from utils.run_helper import prepare_run_dirs
     ensure_start_method()
+    warnings.filterwarnings(
+        "ignore",
+        category=UserWarning,
+        message=".*compute.*before the.*update.*method.*"
+    )
+    warnings.filterwarnings(
+        "ignore",
+        category=UserWarning,
+        message=".*Detected call of `lr_scheduler.step()` before `optimizer.step()`.*",
+    )
     torch.set_float32_matmul_precision('medium')
     torch.backends.cudnn.benchmark = True
     # === 读取参数与配置 ===

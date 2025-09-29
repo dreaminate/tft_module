@@ -45,7 +45,8 @@ def ensure_time_idx(df: pd.DataFrame) -> None:
 # 主逻辑
 # ============================================
 def merged_main(base_dir: str, output_path: str, symbols: list[str], periods: list[str]):
-    def main(base_dir: str=base_dir, output_path: str=output_path, symbols: list[str]=symbols, periods: list[str]=periods):
+    def inner(base_dir: str = base_dir, output_path: str = output_path,
+              symbols: list[str] = symbols, periods: list[str] = periods):
         all_dfs = []
         for period in periods:
             period_dir = os.path.join(base_dir, period)
@@ -142,22 +143,16 @@ def merged_main(base_dir: str, output_path: str, symbols: list[str], periods: li
         merged.to_csv(output_path, index=False)
         print(f"[✅] 数据融合完成 → {output_path}\n")
 
+    inner(base_dir, output_path, symbols, periods)
 
-    # ============================================
-    # CLI
-    # ============================================
-    if __name__ == "__main__":
-        parser = argparse.ArgumentParser(description="Merge crypto CSVs across symbols & periods")
-        parser.add_argument("--base_dir", default="data/crypto_targeted_and_indicated", help="根目录，里面按 period/SYMBOL.csv 存放")
-        parser.add_argument("--output", default="data/merged/full_merged.csv", help="输出 merged csv 路径")
-        parser.add_argument("--symbols", nargs="*", default=["BTC_USDT", "ETH_USDT", "BNB_USDT","ADA_USDT","SOL_USDT"], help="币种列表")
-        parser.add_argument("--periods", nargs="*", default=["1h", "4h", "1d"], help="周期列表")
-        args = parser.parse_args()
 
-        os.makedirs(os.path.dirname(args.output), exist_ok=True)
-        main(args.base_dir, args.output, args.symbols, args.periods)
 if __name__ == "__main__":
-    merged_main("data/crypto_targeted_and_indicated", "data/merged/full_merged.csv", 
-                ["BTC_USDT", "ETH_USDT", "BNB_USDT","ADA_USDT","SOL_USDT"], 
-                ["1h", "4h", "1d"])
-# python src/merged.py --base_dir data/crypto_targeted_and_indicated --output data/merged/full_merged.csv --symbols BTC_USDT ETH_USDT BNB_USDT ADA_USDT SOL_USDT --periods 1h 4h 1d
+    parser = argparse.ArgumentParser(description="Merge crypto CSVs across symbols & periods")
+    parser.add_argument("--base_dir", default="data/crypto_targeted_and_indicated", help="根目录，里面按 period/SYMBOL.csv 存放")
+    parser.add_argument("--output", default="data/merged/full_merged.csv", help="输出 merged csv 路径")
+    parser.add_argument("--symbols", nargs="*", default=["BTC_USDT", "ETH_USDT", "BNB_USDT","ADA_USDT","SOL_USDT"], help="币种列表")
+    parser.add_argument("--periods", nargs="*", default=["1h", "4h", "1d"], help="周期列表")
+    args = parser.parse_args()
+
+    os.makedirs(os.path.dirname(args.output), exist_ok=True)
+    merged_main(args.base_dir, args.output, args.symbols, args.periods)

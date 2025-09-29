@@ -8,8 +8,8 @@ from scipy.stats import skew
 from sklearn.neighbors import LocalOutlierFactor
 
 PERIOD_CONFIG: Dict[str, Dict] = {
-    "1h": {"rolling_window": 48, "ewma": True, "lof_neighbors": 96, "annual_factor": (24*365) ** 0.5, "vj_W": 24, "vj_L": 96, "vj_tau": 1.6, "brk_N": 96, "brk_eps": 0.0015, "brk_vol": 1.2},
-    "4h": {"rolling_window": 48, "ewma": True, "lof_neighbors": 48,  "annual_factor": (6*365) ** 0.5,  "vj_W": 12, "vj_L": 48, "vj_tau": 1.5, "brk_N": 48,  "brk_eps": 0.0015, "brk_vol": 1.2},
+    "1h": {"rolling_window": 96, "ewma": True, "lof_neighbors": 96, "annual_factor": (24*365) ** 0.5, "vj_W": 24, "vj_L": 96, "vj_tau": 1.6, "brk_N": 96, "brk_eps": 0.0015, "brk_vol": 1.2},
+    "4h": {"rolling_window": 56, "ewma": True, "lof_neighbors": 48,  "annual_factor": (6*365) ** 0.5,  "vj_W": 12, "vj_L": 48, "vj_tau": 1.5, "brk_N": 48,  "brk_eps": 0.0015, "brk_vol": 1.2},
     "1d": {"rolling_window": 30, "ewma": True, "lof_neighbors": 30,  "annual_factor": (365) ** 0.5,     "vj_W": 7,  "vj_L": 30, "vj_tau": 1.4, "brk_N": 30,  "brk_eps": 0.001,  "brk_vol": 1.1},
 }
 
@@ -63,28 +63,33 @@ def compute_targets(df: pd.DataFrame, period: str, future_col: str, flags: Dict[
     close = "close"
 
     # === 基础 ===
-    df["logreturn"] = np.log(df[future_col] / df[close])
-    df["binary_trend"] = (df["logreturn"] > 0).astype(int)
+    # !! 关键修复：区分历史收益率（用于特征）和未来收益率（用于目标） !!
+    # 历史收益率 (t-1 -> t)，用于计算输入特征，不含未来信息
+    df["past_logreturn"] = np.log(df[close] / df[close].shift(1))
+    
+    # 未来收益率 (t -> t+1)，仅用于计算目标，包含未来信息
+    df["future_logreturn"] = np.log(df[future_col] / df[close])
+    df["binary_trend"] = (df["future_logreturn"] > 0).astype(int)
     win = PERIOD_CONFIG[period]["rolling_window"]
 
-    # === 波动率 ===
+    # === 波动率 (使用 past_logreturn) ===
     if flags["rolling_volatility"]:
-        df["rolling_volatility"] = np.log1p(df["logreturn"].rolling(win).std().fillna(0))
+        df["rolling_volatility"] = np.log1p(df["past_logreturn"].rolling(win).std().fillna(0))
     if flags["parkinson_volatility"]:
         df["parkinson_volatility"] = np.log1p(((np.log(df["high"] / df["low"])) ** 2).rolling(win).mean().fillna(0))
     if flags["ewma_volatility"]:
-        df["ewmavolatility"] = df["logreturn"].ewm(span=max(2, win // 2), adjust=False).std().fillna(0)
+        df["ewmavolatility"] = df["past_logreturn"].ewm(span=max(2, win // 2), adjust=False).std().fillna(0)
 
-    # === logSharpe: 作为“特征” ===
+    # === logSharpe: 作为“特征” (使用修正后的波动率) ===
     if flags["target_logsharpe"]:
         vol = df.get("rolling_volatility", 1.0)
-        df["target_logsharpe_ratio"] = df["logreturn"] / (vol + eps)
+        df["target_logsharpe_ratio"] = df["future_logreturn"] / (vol + eps)
         # 如需 target，也可以：
         # df["target_logsharpe_ratio"] = df["logsharpe_ratio"]
 
-    # === 结构 ===
+    # === 结构 (使用 past_logreturn) ===
     if flags["return_skewness"]:
-        df["return_skewness"] = df["logreturn"].rolling(win).apply(lambda x: skew(x.dropna()), raw=False)
+        df["return_skewness"] = df["past_logreturn"].rolling(win).apply(lambda x: skew(x.dropna()), raw=False)
     if flags["tail_bias"]:
         # 高低影线差 / ATR
         df["tail_bias_norm"] = ((df["high"] - df[close]) - (df[close] - df["low"])) / (df["atr"] + eps)
@@ -107,21 +112,21 @@ def compute_targets(df: pd.DataFrame, period: str, future_col: str, flags: Dict[
             df["lof_score_all"] = lof.negative_outlier_factor_
             df["is_outlier_all"] = (scores == -1).astype(int)
 
-    # === 目标字段 ===
+    # === 目标字段 (使用 future_logreturn) ===
     if flags["target_logreturn"]:
         # 分位统计使用历史，避免泄露
-        p = df["logreturn"].shift(1).rolling(win)
+        p = df["past_logreturn"].rolling(win)
         p10, p90 = p.quantile(0.10), p.quantile(0.90)
-        df["target_logreturn"] = df["logreturn"]
-        df["target_return_outlier_lower_10"] = (df["logreturn"] < p10).astype(int)
-        df["target_return_outlier_upper_90"] = (df["logreturn"] > p90).astype(int)
+        df["target_logreturn"] = df["future_logreturn"]
+        df["target_return_outlier_lower_10"] = (df["future_logreturn"] < p10).astype(int)
+        df["target_return_outlier_upper_90"] = (df["future_logreturn"] > p90).astype(int)
         df["logreturn_pct_rank"] = p.apply(lambda x: x.rank(pct=True).iloc[-1] if len(x) else np.nan, raw=False)
 
     if flags["target_binarytrend"]:
         df["target_binarytrend"] = df["binary_trend"]
 
     if flags["target_max_drawdown"] or flags["target_drawdown_prob"]:
-        cum_ret = df["logreturn"].cumsum()
+        cum_ret = df["future_logreturn"].cumsum()
         roll_max = cum_ret.rolling(win, min_periods=1).max()
         dd = cum_ret - roll_max
         if flags["target_max_drawdown"]:
@@ -131,7 +136,7 @@ def compute_targets(df: pd.DataFrame, period: str, future_col: str, flags: Dict[
 
     if flags["target_trend_persistence"]:
         # 连续方向长度（更稳）
-        dir_ = np.sign(df["logreturn"].fillna(0))
+        dir_ = np.sign(df["future_logreturn"].fillna(0))
         same_dir = dir_.shift(1).fillna(0) == dir_
         run = (~same_dir).cumsum()
         df["target_trend_persistence"] = same_dir.groupby(run).cumsum() + 1
@@ -145,11 +150,11 @@ def compute_targets(df: pd.DataFrame, period: str, future_col: str, flags: Dict[
     if flags["target_sideway_detect"]:
         # 阈值先保留常量，后续可换成分位阈值
         low_vol = df["rolling_volatility"].rolling(max(2, win // 2)).mean() < 0.02
-        neutral = df["logreturn"].abs() < 0.001
+        neutral = df["future_logreturn"].abs() < 0.001
         df["target_sideway_detect"] = (low_vol & neutral).astype(int)
 
     if flags["target_breakout_count"]:
-        up_seq = df["logreturn"] > 0
+        up_seq = df["future_logreturn"] > 0
         df["target_breakout_count"] = up_seq.groupby((~up_seq).cumsum()).cumsum()
 
     # === 新增目标：fundflow_strength（回归） ===
@@ -184,7 +189,7 @@ def compute_targets(df: pd.DataFrame, period: str, future_col: str, flags: Dict[
     if flags.get("target_vol_jump_prob", False):
         W = PERIOD_CONFIG[period]["vj_W"]; L = PERIOD_CONFIG[period]["vj_L"]; tau = PERIOD_CONFIG[period]["vj_tau"]
         hist_vol = df["rolling_volatility"].rolling(L).mean()
-        fut = df["logreturn"].shift(-1).rolling(W).std()
+        fut = df["future_logreturn"].shift(-1).rolling(W).std()
         ratio = (fut / (hist_vol + 1e-6)).fillna(0.0)
         df["target_vol_jump_prob"] = (ratio >= tau).astype(int)
 
@@ -193,7 +198,7 @@ def compute_targets(df: pd.DataFrame, period: str, future_col: str, flags: Dict[
         ann = PERIOD_CONFIG[period]["annual_factor"]
         # 未来 W 窗的实现波动（年化）：
         W = PERIOD_CONFIG[period]["vj_W"]
-        rv = df["logreturn"].shift(-1).rolling(W).apply(lambda x: float(np.sqrt(np.sum(np.square(x.astype(float))) + 1e-12)), raw=False)
+        rv = df["future_logreturn"].shift(-1).rolling(W).apply(lambda x: float(np.sqrt(np.sum(np.square(x.astype(float))) + 1e-12)), raw=False)
         df["target_realized_vol"] = rv * ann
 
     # === 新增目标：breakout_prob（分类） ===
@@ -208,5 +213,5 @@ def compute_targets(df: pd.DataFrame, period: str, future_col: str, flags: Dict[
         df["target_breakout_prob"] = (up_brk | dn_brk).astype(int)
 
     # 清理临时列
-    df.drop(columns=["logreturn", "binary_trend"], inplace=True, errors="ignore")
+    df.drop(columns=["logreturn", "binary_trend", "past_logreturn", "future_logreturn"], inplace=True, errors="ignore")
     return df

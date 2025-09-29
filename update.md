@@ -501,9 +501,11 @@
   - `MyTFTModule` 内置的混淆矩阵可视化功能被激活，现在会在 TensorBoard 中为每个分类任务生成并记录混淆矩阵图像。
 
 - **提升训练体验**:
+  - **优化训练进度条显示**: 现在训练时，进度条会同时显示即时的批次损失 (`train_loss`) 和整个周期的平均损失 (`train_loss_epoch`)，便于同时观察瞬时动态和整体趋势。
   - **进度条显示可配置**: 在 `MyTFTModule` 和 `train_multi_tft.py` 中引入 `log_metrics_to_prog_bar` 参数（默认为 `False`）。现在可以通过在 `model_config.yaml` 中设置此项，来决定是否在进度条上显示除 `loss` 之外的所有详细指标，使得监控界面更整洁。
   - **显式配置添加**: 为了保持一致性，已将 `log_metrics_to_prog_bar: false` 显式添加到了所有 `configs/experts/**/model_config.yaml` 配置文件中。
   - **消除日志警告**: 修复了 PyTorch Lightning 关于 `batch_size` 推断不明确的警告，通过在 `validation_step` 的 `self.log()` 调用中显式传入 `batch_size`，增强了代码的严谨性。
+  - **屏蔽 `lr_scheduler` 误报**: 在所有训练脚本 (`train_*.py`) 的开头添加了代码，以屏蔽 PyTorch 在与 Lightning 一同使用 `OneCycleLR` 时产生的关于 `lr_scheduler.step()` 调用顺序的误报警告。这不影响实际训练，仅为保持日志整洁。
 
 - **训练脚本与配置优化**:
   - **指标周期限定**: `train_multi_tft.py` 现在会将当前训练的周期（如 `4h`）传递给指标工厂，确保只为当前任务生成对应周期的指标，避免了日志中出现无关周期的指标（如 `1h`, `1d`）。
@@ -517,4 +519,16 @@
 - `utils/metric_factory.py`: 为回归任务增加了 `R2Score` 指标。
 - `configs/experts/**/*.yaml`: 批量添加了 `log_metrics_to_prog_bar: false`。
 - `README.md` / `update.md`: 同步了最新的改动说明。
+
+## 2025-09-29 — Alpha-Dir-TFT 数据管线修复与命令补充
+
+- **指标归一化窗口纠正**：`src/indicating.py` 中 tail risk 部分不再覆盖主窗口长度，保证 1h/4h/1d 使用 96/56/30。
+- **合并脚本修复**：`src/merged.py` 重构 `merged_main`，模块导入时也会生成 `full_merged.csv` 与相关报表。
+- **README 更新**：新增 Alpha-Dir-TFT 专属流程（构建→特筛→训练）并补充 `experts_cli.py` 启动示例；归一化后缀说明同步更新为 `_zn96/_mm96` 等。
+
+## 2025-09-29 — 分类损失权重修复与概率监控增强
+
+- 修复 `utils/weighted_bce.WeightedBinaryCrossEntropy` 的自动权重：允许 `pos_weight < 1` 并对正负样本对称加权，同时在批内归一化权重，防止“全预测为正”失去惩罚。
+- 新增损失权重监控：`latest_stats` 记录 pos/neg 权重、归一化因子等，训练与验证阶段在日志中显示。
+- `models/tft_module.MyTFTModule` 验证阶段增加分类概率统计（均值、标准差、`pred_pos_rate@0.5`），便于快速发现预测极化或阈值接线问题。
 

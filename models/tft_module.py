@@ -87,27 +87,28 @@ class MyTFTModule(LightningModule):
         **tft_kwargs,
     ):
         super().__init__()
-        self.save_hyperparameters({
-            "learning_rate": learning_rate,
-            "loss_schedule": loss_schedule or {},
-            "pct_start": pct_start,
-            "div_factor": div_factor,
-            "final_div_factor": final_div_factor,
-            "steps_per_epoch": steps_per_epoch,
-            "output_head_cfg": output_head_cfg or {},
-            "symbol_weight_map": symbol_weight_map or {},
-            "expert_name": expert_name,
-            "period_name": period_name,
-            "modality_name": modality_name,
-            "schema_version": schema_version,
-            "data_version": data_version,
-            "expert_version": expert_version,
-            "train_window_id": train_window_id,
-            "enable_calibration": enable_calibration,
-            "detailed_logging": bool(detailed_logging),
-            "log_on_step": bool(log_on_step),
-            "log_metrics_to_prog_bar": bool(log_metrics_to_prog_bar),
-        })
+        self.save_hyperparameters(
+            "learning_rate",
+            "loss_schedule",
+            "pct_start",
+            "div_factor",
+            "final_div_factor",
+            "steps_per_epoch",
+            "output_head_cfg",
+            "symbol_weight_map",
+            "expert_name",
+            "period_name",
+            "modality_name",
+            "schema_version",
+            "data_version",
+            "expert_version",
+            "train_window_id",
+            "enable_calibration",
+            "detailed_logging",
+            "log_on_step",
+            "log_metrics_to_prog_bar",
+            ignore=["dataset", "loss_list", "weights", "metrics_list", "norm_pack", "tft_kwargs"],
+        )
         self.target_names = target_names or []
         self.loss_schedule = loss_schedule or {}
         self.regression_targets = [
@@ -130,6 +131,8 @@ class MyTFTModule(LightningModule):
         self.train_window_id = train_window_id or 'window_unknown'
         self.val_cls_storage = defaultdict(list)
         self.val_reg_storage = defaultdict(list)
+        self.val_losses = []
+        self.train_losses = []
         self.calibration_temperature = {}
         self.output_head_cfg = output_head_cfg or {}
         self.symbol_weight_cfg = symbol_weight_map or {}
@@ -392,15 +395,12 @@ class MyTFTModule(LightningModule):
         raws = torch.stack([v["raw"] for v in sub_losses.values()])
         w = self.loss_fn.w.to(raws)
         raw_total = (raws * w).sum()
-        # Unified epoch-level loss logging (no per-step, no raw sub-loss spam)
-        self.log(
-            f"{stage}_loss",
-            weighted_total,
-            on_step=bool(self.hparams.get("log_on_step", False)),
-            on_epoch=True,
-            prog_bar=True,
-            batch_size=y_enc.size(0),
-        )
+
+        loss_stats = getattr(self.loss_fn.loss_fn, "latest_stats", None)
+        if loss_stats:
+            for k, v in loss_stats.items():
+                self.log(f"{stage}/loss_{k}", v, on_step=False, on_epoch=True, prog_bar=False)
+
         # Optionally log detailed components (epoch-level only)
         if bool(self.hparams.get("detailed_logging", False)):
             self.log(
@@ -420,6 +420,7 @@ class MyTFTModule(LightningModule):
         super().on_validation_epoch_start()
         self.val_cls_storage = defaultdict(list)
         self.val_reg_storage = defaultdict(list)
+        self.val_losses.clear()
 
     def _collect_validation_outputs(self, preds_logits, preds_eval, y_enc, y_eval, sym_idx, per_idx, batch_inputs):
         if not self.cls_target_idx and not self.reg_target_idx:
@@ -457,17 +458,44 @@ class MyTFTModule(LightningModule):
 
     def training_step(self, batch, batch_idx):
         total, *_ = self._shared_step(batch, "train")
+        self.train_losses.append(total.detach())
+        self.log("train_loss", total, prog_bar=True, on_step=True, logger=False)
         return total
 
     def validation_step(self, batch, batch_idx):
         total, preds, y_enc, x, sym_idx, per_idx = self._shared_step(batch, "val")
-        # 记录一个稳定存在的验证损失，便于 EarlyStopping 监控与排错
-        try:
-            self.log("val_loss", total, on_step=False, on_epoch=True, prog_bar=True, logger=True, batch_size=y_enc.size(0))
-        except Exception:
-            pass
+        self.val_losses.append(total.detach())
         preds_eval, y_eval = self._destandardize_pred_and_true(preds, y_enc, sym_idx, per_idx)
         period_idx = x["groups"][:, self.period_group_idx].to(self.device)
+
+        if self.cls_target_idx:
+            probs = torch.sigmoid(preds[:, self.cls_target_idx])
+            self.log(
+                f"{stage}/cls_prob_mean",
+                probs.mean(),
+                on_step=False,
+                on_epoch=True,
+                prog_bar=False,
+                batch_size=probs.numel(),
+            )
+            self.log(
+                f"{stage}/cls_prob_std",
+                probs.std(unbiased=False),
+                on_step=False,
+                on_epoch=True,
+                prog_bar=False,
+                batch_size=probs.numel(),
+            )
+            pred_pos_rate = (probs > 0.5).float().mean()
+            self.log(
+                f"{stage}/pred_pos_rate@0.5",
+                pred_pos_rate,
+                on_step=False,
+                on_epoch=True,
+                prog_bar=False,
+                batch_size=probs.numel(),
+            )
+
         for idx, metric in enumerate(self.metrics_list):
             name = self.metric_names[idx]
             suffix = name.split("@")[-1]
@@ -497,6 +525,11 @@ class MyTFTModule(LightningModule):
 
     def on_validation_epoch_end(self):
         super().on_validation_epoch_end()
+        # 强制记录 val_loss 到进度条
+        if self.val_losses:
+            avg_val_loss = torch.stack(self.val_losses).mean()
+            self.log("val_loss", avg_val_loss, on_epoch=True, prog_bar=True, logger=True)
+        
         prog_bar_metrics = self.hparams.get("log_metrics_to_prog_bar", False)
         for name, metric in zip(self.metric_names, self.metrics_list):
             val = float('nan')
@@ -554,6 +587,8 @@ class MyTFTModule(LightningModule):
             self._log_validation_calibration_and_reports()
 
     def on_train_epoch_start(self):
+        super().on_train_epoch_start()
+        self.train_losses.clear()
         if self.current_epoch in self.loss_schedule:
             vals = self.loss_schedule[self.current_epoch]
             expected = int(self.loss_fn.w.numel())
@@ -869,6 +904,9 @@ class MyTFTModule(LightningModule):
 
     def on_train_epoch_end(self):
         super().on_train_epoch_end()
+        if self.train_losses:
+            avg_train_loss = torch.stack(self.train_losses).mean()
+            self.log("train_loss_epoch", avg_train_loss, prog_bar=True, on_epoch=True, logger=True)
         self._log_symbol_head_stats()
 
     def on_predict_epoch_start(self):
