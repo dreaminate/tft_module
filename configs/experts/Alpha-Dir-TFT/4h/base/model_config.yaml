@@ -12,15 +12,17 @@ num_workers: 4
 hidden_size: 128
 lstm_layers: 1
 attention_head_size: 2
-dropout: 0.1
+dropout: 0.2
 learning_rate: 1.0e-3
-max_epochs: 60
+max_epochs: 100
 min_epochs: 3
 monitor: val_loss
 precision: "16-mixed"
 grad_clip: 0.2
 accumulate: 1
-early_stop_patience: 5
+early_stop_patience: 100
+early_stop_min_delta: 0.0001
+
 log_name: Alpha-Dir-TFT_4h_base
 
 devices: 1
@@ -32,7 +34,9 @@ data_version: data_unknown
 expert_version: expert_unknown
 train_window_id: window_unknown
 enable_calibration: false
-max_encoder_length: 42
+detailed_logging: false
+log_on_step: false
+max_encoder_length: 56
 max_prediction_length: 1
 add_relative_time_idx: true
 add_target_scales: false
@@ -41,3 +45,4 @@ static_categoricals:
   - symbol
   - period
 static_reals: []
+log_metrics_to_prog_bar: false

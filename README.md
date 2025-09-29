@@ -31,7 +31,9 @@
 2) 构建技术面与目标（full_merged.csv）
 ```bash
 python src/build_full_merged.py --periods 1h,4h,1d
-# 输出：data/merged/full_merged.csv 与 data/merged/full_merged.pkl
+# 输出：data/merged/full_merged.csv
+# 如需生成 PKL：
+#   python src/csv2Pkl.py --src data/merged/full_merged.csv --dst data/pkl_merged/full_merged.pkl
 ```
   参数（来自实际代码 src/build_full_merged.py）
   - `--periods`：空格或逗号分隔，默认 `1h 4h 1d`（PowerShell 建议加引号，如 `'1h,4h,1d'`）
@@ -72,6 +74,10 @@ python scripts/experts_cli.py train  --expert Alpha-Dir-TFT --leaf 4h/base
 python scripts/experts_cli.py resume --expert Alpha-Dir-TFT --leaf 4h/base
 python scripts/experts_cli.py warm   --expert Alpha-Dir-TFT --leaf 4h/base
 ```
+
+注意：
+- 续训需要在叶子 `model_config.yaml` 设置 `resume_ckpt: <path/to/ckpt>`（脚本读取该字段）。
+- 热启动需要设置 `warm_start_ckpt: <path/to/ckpt>`（仅加载模型权重，不恢复优化器/epoch）。
 - 训练配置：`configs/experts/<Expert>/<period>/<modality>/model_config.yaml`
   - 关键字段：`batch_size, learning_rate, max_epochs, min_epochs, devices, monitor=val_loss,` 以及
     `max_encoder_length, max_prediction_length, add_relative_time_idx, allow_missing_timesteps` 等。
@@ -84,17 +90,17 @@ python scripts/experts_cli.py warm   --expert Alpha-Dir-TFT --leaf 4h/base
 ```bash
 python pipelines/build_oof_for_z.py \
   --predictions-root lightning_logs \
-  --data-path data/merged/expert_group/full_merged.pkl \
+  --data-path data/pkl_merged/full_merged.pkl \
   --output datasets/z_train.parquet
 ```
 
 7) 离线评估（预告）
 ```bash
-# 计划中的离线评估脚本（后续提供）
-python scripts/offline_eval.py \
-  --predictions lightning_logs/experts/<expert>/<period>/<modality>/tft/predictions/*.parquet \
-  --targets-pkl data/pkl_merged/full_merged_{base|rich}.pkl \
-  --metrics ap,roc,rmse,mae --calibration temperature
+# 计划中的离线评估脚本（预告，脚本暂未提供，示例仅作参考）
+# python scripts/offline_eval.py \
+#   --predictions lightning_logs/experts/<expert>/<period>/<modality>/tft/<log_name>/version_*/predictions/*.parquet \
+#   --targets-pkl data/pkl_merged/full_merged.pkl \
+#   --metrics ap,roc,rmse,mae --calibration temperature
 ```
 
 ## 最新亮点（v0.2.8）
@@ -271,7 +277,7 @@ tft_module/
 4. **训练产物**：
    - 日志：`lightning_logs/experts/<expert>/<period>/<modality>/tft/`
    - 权重：`checkpoints/experts/<expert>/<period>/<modality>/tft/`
-   - 预测：`predictions/predictions_<expert>_<period>_<timestamp>.parquet`
+   - 预测：`lightning_logs/experts/<expert>/<period>/<modality>/tft/<log_name>/version_*/predictions/*.parquet`
    - 自动保存 top-k 和 `last.ckpt`
 
 ## 预测契约与评估
@@ -297,7 +303,7 @@ tft_module/
   - 分币种×周期汇总：`eval_report_*.csv` 详细评估报告
 
 - **预测数据管理**：
-  - 自动写入 parquet 格式：`predictions/predictions_<expert>_<period>_<timestamp>.parquet`
+  - 自动写入 parquet 格式：`lightning_logs/experts/<expert>/<period>/<modality>/tft/<log_name>/version_*/predictions/*.parquet`
   - 包含完整的元信息：符号、周期、时间索引、模型版本等
   - 支持批量预测和增量更新
 
@@ -308,12 +314,12 @@ tft_module/
    - 包含标准化的预测分数、不确定性和元信息
 
 2. **构建OOF数据集**：
-   ```bash
-   python pipelines/build_oof_for_z.py \
-       --predictions-root lightning_logs \
-       --data-path data/merged/expert_group/full_merged.pkl \
-       --output datasets/z_train.parquet
-   ```
+  ```bash
+  python pipelines/build_oof_for_z.py \
+      --predictions-root lightning_logs \
+      --data-path data/pkl_merged/full_merged.pkl \
+      --output datasets/z_train.parquet
+  ```
    - 自动校验版本一致性，合并Regime特征和专家预测
 
 3. **数据质量审计**：
@@ -343,10 +349,10 @@ tft_module/
   # 训练指定专家配置
   python scripts/experts_cli.py train --expert Alpha-Dir-TFT --leaf 1h/base
 
-  # 续训
+  # 续训（需在叶子 model_config.yaml 配置 resume_ckpt）
   python scripts/experts_cli.py resume --expert Alpha-Dir-TFT --leaf 1h/base
 
-  # Warm-start微调
+  # Warm-start微调（需配置 warm_start_ckpt）
   python scripts/experts_cli.py warm --expert Alpha-Dir-TFT --leaf 1h/base
   ```
 
@@ -426,11 +432,11 @@ python src/build_full_merged.py --periods 1h,4h # 仅 1h 与 4h
    ```bash
    # 各专家预测（训练时自动生成，或单独调用predict）
    # 构建Z层训练数据
-   python pipelines/build_oof_for_z.py \
-       --predictions-root lightning_logs \
-       --data-path data/merged/expert_group/full_merged.pkl \
-       --output datasets/z_train.parquet
-   ```
+    python pipelines/build_oof_for_z.py \
+        --predictions-root lightning_logs \
+        --data-path data/pkl_merged/full_merged.pkl \
+        --output datasets/z_train.parquet
+    ```
 
 6. **训练Z-Combiner**
    ```bash
@@ -747,10 +753,10 @@ python train_multi_tft.py --config configs/experts/Custom-Expert/1h/base/model_c
 - 训练期间不再记录 AP/AUC 等补充指标与概率校准；建议在训练完成后，使用离线脚本进行评估与温度缩放。
 - 预留脚本入口（占位）：
   ```bash
-  # 计划中的离线评估脚本（后续提供）
-  python scripts/offline_eval.py \
-    --predictions lightning_logs/experts/<expert>/<period>/<modality>/tft/predictions/*.parquet \
-    --targets-pkl data/pkl_merged/full_merged_{base|rich}.pkl \
-    --metrics ap,roc,rmse,mae --calibration temperature
+  # 计划中的离线评估脚本（预告，脚本暂未提供，示例仅作参考）
+  # python scripts/offline_eval.py \
+  #   --predictions lightning_logs/experts/<expert>/<period>/<modality>/tft/<log_name>/version_*/predictions/*.parquet \
+  #   --targets-pkl data/pkl_merged/full_merged.pkl \
+  #   --metrics ap,roc,rmse,mae --calibration temperature
   ```
   - 功能：读取预测与目标构建对齐集，计算 AP/ROC-AUC/F1/RMSE/MAE；可选做温度缩放并输出 ECE/Brier 与可靠性曲线；生成 `eval_report_*.csv`。

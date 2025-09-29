@@ -12,6 +12,7 @@ from pytorch_forecasting.metrics import MultiLoss, MAE
 import torchmetrics
 import matplotlib.pyplot as plt
 from sklearn.metrics import ConfusionMatrixDisplay
+import numpy as np
 
 
 class HybridMultiLoss(nn.Module):
@@ -79,6 +80,10 @@ class MyTFTModule(LightningModule):
         expert_version: str | None = None,
         train_window_id: str | None = None,
         enable_calibration: bool = False,
+        # logging preferences
+        detailed_logging: bool = False,
+        log_on_step: bool = False,
+        log_metrics_to_prog_bar: bool = False,
         **tft_kwargs,
     ):
         super().__init__()
@@ -99,6 +104,9 @@ class MyTFTModule(LightningModule):
             "expert_version": expert_version,
             "train_window_id": train_window_id,
             "enable_calibration": enable_calibration,
+            "detailed_logging": bool(detailed_logging),
+            "log_on_step": bool(log_on_step),
+            "log_metrics_to_prog_bar": bool(log_metrics_to_prog_bar),
         })
         self.target_names = target_names or []
         self.loss_schedule = loss_schedule or {}
@@ -179,10 +187,12 @@ class MyTFTModule(LightningModule):
         ]
         cls_suffix = ("_f1", "_precision", "_recall", "_accuracy", "_ap", "_auc")
         self.metric_is_cls = [any(n.split("@")[0].endswith(s) for s in cls_suffix) for n in self.metric_names]
+        # Build confusion matrices for all classification metrics (including AP/AUC),
+        # so that we always have at least one image in TensorBoard Images panel.
         self.confmats = nn.ModuleDict({
             name: torchmetrics.classification.BinaryConfusionMatrix()
             for name, is_cls in zip(self.metric_names, self.metric_is_cls)
-            if is_cls and "_ap" not in name and "_auc" not in name
+            if is_cls
         })
 
         self.period_group_idx = dataset.group_ids.index("period")
@@ -382,11 +392,28 @@ class MyTFTModule(LightningModule):
         raws = torch.stack([v["raw"] for v in sub_losses.values()])
         w = self.loss_fn.w.to(raws)
         raw_total = (raws * w).sum()
-        self.log(f"{stage}_loss_raw", raw_total, on_step=True, on_epoch=True, prog_bar=True, batch_size=y_enc.size(0))
-        self.log(f"{stage}_loss", weighted_total, on_step=True, on_epoch=True, prog_bar=True, batch_size=y_enc.size(0))
-        for name, item in sub_losses.items():
-            self.log(f"{stage}/{name}_raw", item["raw"], on_step=True, on_epoch=True, batch_size=y_enc.size(0))
-            self.log(f"{stage}/{name}_w", item["weighted"], on_step=True, on_epoch=True, batch_size=y_enc.size(0))
+        # Unified epoch-level loss logging (no per-step, no raw sub-loss spam)
+        self.log(
+            f"{stage}_loss",
+            weighted_total,
+            on_step=bool(self.hparams.get("log_on_step", False)),
+            on_epoch=True,
+            prog_bar=True,
+            batch_size=y_enc.size(0),
+        )
+        # Optionally log detailed components (epoch-level only)
+        if bool(self.hparams.get("detailed_logging", False)):
+            self.log(
+                f"{stage}_loss_raw",
+                raw_total,
+                on_step=False,
+                on_epoch=True,
+                prog_bar=False,
+                batch_size=y_enc.size(0),
+            )
+            for name, item in sub_losses.items():
+                self.log(f"{stage}/{name}_raw", item["raw"], on_step=False, on_epoch=True, batch_size=y_enc.size(0))
+                self.log(f"{stage}/{name}_w", item["weighted"], on_step=False, on_epoch=True, batch_size=y_enc.size(0))
         return weighted_total, preds_bt, y_enc, x, sym_idx, per_idx
 
     def on_validation_epoch_start(self):
@@ -436,7 +463,7 @@ class MyTFTModule(LightningModule):
         total, preds, y_enc, x, sym_idx, per_idx = self._shared_step(batch, "val")
         # 记录一个稳定存在的验证损失，便于 EarlyStopping 监控与排错
         try:
-            self.log("val_loss", total, on_step=False, on_epoch=True, prog_bar=True, logger=True)
+            self.log("val_loss", total, on_step=False, on_epoch=True, prog_bar=True, logger=True, batch_size=y_enc.size(0))
         except Exception:
             pass
         preds_eval, y_eval = self._destandardize_pred_and_true(preds, y_enc, sym_idx, per_idx)
@@ -470,6 +497,7 @@ class MyTFTModule(LightningModule):
 
     def on_validation_epoch_end(self):
         super().on_validation_epoch_end()
+        prog_bar_metrics = self.hparams.get("log_metrics_to_prog_bar", False)
         for name, metric in zip(self.metric_names, self.metrics_list):
             val = float('nan')
             try:
@@ -488,7 +516,7 @@ class MyTFTModule(LightningModule):
                     self.print(f"Warn: could not compute metric '{name}': {e}")
 
             # Log NaN if computation fails; EarlyStopping handles this gracefully
-            self.log(f"val_{name}", val, on_epoch=True, prog_bar=True)
+            self.log(f"val_{name}", val, on_epoch=True, prog_bar=prog_bar_metrics)
             metric.reset()
 
             # 记录本轮该度量的样本数，便于排查
@@ -512,6 +540,13 @@ class MyTFTModule(LightningModule):
                 ConfusionMatrixDisplay(cm_val, display_labels=[0, 1]).plot(ax=ax, colorbar=False)
                 if hasattr(self.logger, "experiment"):
                     self.logger.experiment.add_figure(f"val/confmat_{tag}", fig, self.current_epoch)
+                    try:
+                        fig.canvas.draw()
+                        w, h = fig.canvas.get_width_height()
+                        img = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8).reshape(h, w, 3)
+                        self.logger.experiment.add_image(f"val/confmat_img_{tag}", img, self.current_epoch, dataformats='HWC')
+                    except Exception:
+                        pass
                 plt.close(fig)
             cm.reset()
 

@@ -2,7 +2,7 @@ from typing import List, Tuple
 from torchmetrics.classification import (
     BinaryF1Score, BinaryAUROC, AveragePrecision, Accuracy, Precision, Recall,
 )
-from torchmetrics.regression import MeanSquaredError, MeanAbsoluteError
+from torchmetrics.regression import MeanSquaredError, MeanAbsoluteError, R2Score
 
 DEFAULT_HORIZONS = ["1h", "4h", "1d"]
 
@@ -36,6 +36,7 @@ def get_metrics_by_targets(
                 metrics_list += [
                     (f"{t}_rmse{suffix}", MeanSquaredError(squared=False)),
                     (f"{t}_mae{suffix}", MeanAbsoluteError()),
+                    (f"{t}_r2{suffix}", R2Score()),
                 ]
     return metrics_list
 

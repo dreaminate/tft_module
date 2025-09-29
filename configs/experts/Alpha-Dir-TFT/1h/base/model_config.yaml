@@ -35,6 +35,9 @@ data_version: data_unknown
 expert_version: expert_unknown
 train_window_id: window_unknown
 enable_calibration: false
+early_stop_min_delta: 0.0001
+detailed_logging: false
+log_on_step: false
 max_encoder_length: 36
 max_prediction_length: 1
 add_relative_time_idx: true
@@ -44,3 +47,5 @@ static_categoricals:
   - symbol
   - period
 static_reals: []
+
+log_metrics_to_prog_bar: false

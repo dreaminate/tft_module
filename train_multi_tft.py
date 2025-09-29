@@ -292,8 +292,11 @@ def main():
         loss_list=get_losses_by_targets(target_names),
         weights=_resolve_weights(weight_cfg or {}, target_names),
         output_size=output_size_arg,
-        # 禁用所有度量与校准，仅依赖 val_loss 作为监控
-        metrics_list=[],
+        # 启用 metrics_list，并根据当前训练的周期（period）来限定范围
+        metrics_list=get_metrics_by_targets(
+            target_names,
+            horizons=[str(cfg_period)] if cfg_period else None
+        ),
         target_names=target_names,
         period_map=period_map,
         learning_rate=model_cfg["learning_rate"],
@@ -314,6 +317,7 @@ def main():
         log_interval=model_cfg.get("log_interval", 100),
         log_val_interval=model_cfg.get("log_val_interval", 1),
         enable_calibration=bool(model_cfg.get("enable_calibration", False)),
+        log_metrics_to_prog_bar=bool(model_cfg.get("log_metrics_to_prog_bar", False)),
     )
 
     # ===== 日志 & 回调 =====
@@ -354,7 +358,12 @@ def main():
         save_last=True,
         dirpath=ckpt_dir,
     )
-    early_stop = EarlyStopping(monitor=monitor_key, patience=model_cfg.get("early_stop_patience", 5), mode=monitor_mode)
+    early_stop = EarlyStopping(
+        monitor=monitor_key,
+        patience=model_cfg.get("early_stop_patience", 5),
+        mode=monitor_mode,
+        min_delta=float(model_cfg.get("early_stop_min_delta", 0.0) or 0.0),
+    )
 
     # 保存配置文件快照
     os.makedirs(os.path.join(log_root, "configs"), exist_ok=True)

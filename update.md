@@ -60,6 +60,8 @@
 ### 文档与工具升级
 - **README全面更新**：新增专家架构总览、完整工作流、专家接入指南
 - **CLI工具增强**：`experts_cli.py`支持list/train/resume/warm等完整操作
+  - 说明：`resume` 从叶子 `model_config.yaml` 的 `resume_ckpt` 读取断点；`warm` 从 `warm_start_ckpt` 读取预训练（仅权重）。未配置会报错。
+  - 训练脚本已支持从 `model_config.yaml` 读取 `devices/strategy/precision/accumulate`；多卡未显式配置策略时默认 `ddp_find_unused_parameters_true`。
 - **一键构建工具**：`build_full_merged.py`串联指标→目标→合并流程
 - **审计工具完善**：泄露检测、数据质量检查、版本一致性验证
 
@@ -481,10 +483,38 @@
 ### 离线评估（预告/引子）
 预留脚本入口，后续提供实现：
 ```bash
-python scripts/offline_eval.py \
-  --predictions lightning_logs/experts/<expert>/<period>/<modality>/tft/predictions/*.parquet \
-  --targets-pkl data/pkl_merged/full_merged_{base|rich}.pkl \
-  --metrics ap,roc,rmse,mae --calibration temperature
+# 脚本暂未提供（预告，示例仅作参考）
+# python scripts/offline_eval.py \
+#   --predictions lightning_logs/experts/<expert>/<period>/<modality>/tft/<log_name>/version_*/predictions/*.parquet \
+#   --targets-pkl data/pkl_merged/full_merged.pkl \
+#   --metrics ap,roc,rmse,mae --calibration temperature
 ```
-功能：计算 AP/ROC-AUC/F1/RMSE/MAE，温度缩放校准并输出 ECE/Brier 与可靠性曲线，生成 `eval_report_*.csv`。
+功能：计算 AP/ROC-AUC/F1/RMSE/MAE，温度缩冷缩放校准并输出 ECE/Brier 与可靠性曲线，生成 `eval_report_*.csv`。
+
+## 2025-09-29 — 训练指标体系增强与工作流优化
+
+### 核心变更
+
+- **启用并增强训练指标**:
+  - `train_multi_tft.py` 中重新启用了指标计算（不再强制 `metrics_list=[]`），允许在训练期间监控丰富的性能指标。
+  - `utils/metric_factory.py` 中为回归任务新增了 `R2Score` (R² 决定系数)，以评估模型的拟合优度。
+  - `MyTFTModule` 内置的混淆矩阵可视化功能被激活，现在会在 TensorBoard 中为每个分类任务生成并记录混淆矩阵图像。
+
+- **提升训练体验**:
+  - **进度条显示可配置**: 在 `MyTFTModule` 和 `train_multi_tft.py` 中引入 `log_metrics_to_prog_bar` 参数（默认为 `False`）。现在可以通过在 `model_config.yaml` 中设置此项，来决定是否在进度条上显示除 `loss` 之外的所有详细指标，使得监控界面更整洁。
+  - **显式配置添加**: 为了保持一致性，已将 `log_metrics_to_prog_bar: false` 显式添加到了所有 `configs/experts/**/model_config.yaml` 配置文件中。
+  - **消除日志警告**: 修复了 PyTorch Lightning 关于 `batch_size` 推断不明确的警告，通过在 `validation_step` 的 `self.log()` 调用中显式传入 `batch_size`，增强了代码的严谨性。
+
+- **训练脚本与配置优化**:
+  - **指标周期限定**: `train_multi_tft.py` 现在会将当前训练的周期（如 `4h`）传递给指标工厂，确保只为当前任务生成对应周期的指标，避免了日志中出现无关周期的指标（如 `1h`, `1d`）。
+  - **文档更新**: `README.md` 和 `update.md` 中的一些路径和命令示例得到了更新和修正，以反映最新的项目结构和实践。
+  - **调试脚本**: 新增了 `_debug_ckpt_affine.py`, `_debug_symbol_check.py`, `_debug_symbol_stats.py` 等脚本，便于对模型权重和数据进行快速检查。
+
+### 影响文件（关键）
+
+- `train_multi_tft.py`: 重新启用指标计算，增加 `log_metrics_to_prog_bar` 配置传递，并限定指标的生成周期。
+- `models/tft_module.py`: 新增 `log_metrics_to_prog_bar` 参数来控制进度条显示，并为 `val_loss` 日志添加了 `batch_size`。
+- `utils/metric_factory.py`: 为回归任务增加了 `R2Score` 指标。
+- `configs/experts/**/*.yaml`: 批量添加了 `log_metrics_to_prog_bar: false`。
+- `README.md` / `update.md`: 同步了最新的改动说明。
 

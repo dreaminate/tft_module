@@ -23,6 +23,7 @@ from pytorch_forecasting import TimeSeriesDataSet
 from pytorch_forecasting.data import NaNLabelEncoder, MultiNormalizer, TorchNormalizer
 from torch.utils.data import DataLoader
 from utils.feature_utils import get_pinned_features
+import re
 
 
 def _robust_parse_datetime(df: pd.DataFrame) -> pd.DataFrame:
@@ -95,9 +96,24 @@ def get_dataloaders(
         sset = set(str(s) for s in symbols)
         df = df[df["symbol"].astype(str).isin(sset)]
 
+    # 严格去掉分组键缺失的行，避免出现字符串 "nan" 被当成合法类别
+    df = df[df["symbol"].notna() & df["period"].notna()].copy()
+    # 规范化 symbol：去空格/统一大写/分隔符标准化；将 BTCUSDT 之类合并为 BTC_USDT
+    def _canon_symbol(x: str) -> str:
+        s = str(x).strip().upper()
+        s = s.replace('/', '_').replace('-', '_')
+        m = re.match(r"^([A-Z]+)(USDT|USD|BUSD|USDC)$", s)
+        if m:
+            s = f"{m.group(1)}_{m.group(2)}"
+        return s
+    try:
+        df['symbol'] = df['symbol'].astype(str).map(_canon_symbol)
+    except Exception:
+        pass
     df = df.sort_values(["symbol", "period", "datetime"]).copy()
     df["time_idx"] = df.groupby(["symbol", "period"]).cumcount()
-    df["symbol"], df["period"] = df["symbol"].astype(str), df["period"].astype(str)
+    df["symbol"] = df["symbol"].astype(str)
+    df["period"] = df["period"].astype(str)
 
     # --- 全局时间划分 ---
     if val_mode == "days":
@@ -151,7 +167,8 @@ def get_dataloaders(
         if c not in known_reals
         and c not in ["timestamp", "symbol", "time_idx", "datetime", "period"]
         and not c.startswith("future")
-        and c not in targets
+        # 不把任何 target_* 列当作特征，只允许在 targets 列表中使用
+        and not c.startswith("target_")
         and not df_train[c].isna().all()
     ]
     unknown_reals_before = list(unknown_reals)
@@ -237,9 +254,10 @@ def get_dataloaders(
         "stds": stds,
     }
 
-    symbol_encoder = NaNLabelEncoder(add_nan=True)
+    # No placeholder NaN class: we already drop rows with missing group keys.
+    symbol_encoder = NaNLabelEncoder(add_nan=False)
     symbol_encoder.fit(pd.Series(symbol_classes))
-    period_encoder = NaNLabelEncoder(add_nan=True)
+    period_encoder = NaNLabelEncoder(add_nan=False)
     period_encoder.fit(pd.Series(period_classes))
 
     # 目标归一化器：单目标用单个 Normalizer，多目标用 MultiNormalizer

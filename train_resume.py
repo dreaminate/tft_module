@@ -257,6 +257,7 @@ def main():
         monitor=monitor_key,
         patience=model_cfg.get("early_stop_patience", 5),
         mode=monitor_mode,
+        min_delta=float(model_cfg.get("early_stop_min_delta", 0.0) or 0.0),
     )
 
     # 保存配置到对应专家分桶
@@ -269,11 +270,22 @@ def main():
         yaml.safe_dump(used, f)
 
     # ===== 训练 =====
-    trainer = Trainer(
+    # 读取设备/策略配置，默认与多卡场景兼容
+    devices_cfg = model_cfg.get("devices", 1)
+    strategy = model_cfg.get("strategy")
+    multi_device = False
+    if isinstance(devices_cfg, int):
+        multi_device = devices_cfg != 1
+    elif isinstance(devices_cfg, (list, tuple)):
+        multi_device = len(devices_cfg) > 1
+    if strategy is None and multi_device:
+        strategy = "ddp_find_unused_parameters_true"
+
+    trainer_kwargs = dict(
         max_epochs=model_cfg["max_epochs"],
         log_every_n_steps=int(model_cfg.get("log_every_n_steps", model_cfg.get("log_interval", 100)) or 100),
         accelerator="gpu",
-        devices=1,
+        devices=devices_cfg,
         precision=model_cfg.get("precision", "16-mixed"),
         gradient_clip_val=model_cfg.get("grad_clip", 0.2),
         accumulate_grad_batches=model_cfg.get("accumulate", 1),
@@ -281,6 +293,9 @@ def main():
         logger=logger,
         enable_progress_bar=True,
     )
+    if strategy is not None:
+        trainer_kwargs["strategy"] = strategy
+    trainer = Trainer(**trainer_kwargs)
     trainer.fit(model, train_dataloaders=train_loader, val_dataloaders=val_loader)
 
     # ===== 完成 =====
