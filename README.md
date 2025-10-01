@@ -5,12 +5,15 @@
 ## 端到端命令速查（从采集 → 融合 → 筛选 → 训练）
 
 1) 采集与准备（API → 原始数据）
+
 - 衍生品/链上指标（时间段、币种、周期可配）
+
   ```bash
   # 例：按时间范围与币种抓取 1d 指标
   python src/apied.py --start 2020-10-02 --end 2025-12-18 \
-    --symbols BTC,ETH,SOL,BNB,ADA --interval 1d
+  --symbols BTC,ETH,SOL,BNB,ADA --interval 1d
   ```
+
   参数（来自实际代码 src/apied.py）
   - `--symbols`：逗号分隔，默认 `BTC,ETH,SOL,BNB,ADA`
   - `--interval`：`1h|4h|1d`，默认 `1d`
@@ -18,53 +21,97 @@
   - `--pause`：每次调用后的 sleep 秒数，默认 `1.0`
   - `--start`：起始时间；支持 13 位毫秒 / 10 位秒 / `YYYY-MM-DD` / `YYYYMMDD` / ISO8601 / `now`，默认 `2020-10-01`
   - `--end`：终止时间；同上，默认 `now`
+
 - OHLCV/K线（编辑 `src/ccatch.py` 顶部常量后运行）
+
   ```bash
   python src/ccatch.py
   ```
+
   关键常量（来自实际代码 src/ccatch.py 顶部）
   - `BASE_SYMBOLS=['BTC/USDT','ETH/USDT','SOL/USDT','BNB/USDT','ADA/USDT']`
   - `TIMEFRAMES=['1h','4h','1d']`
   - `SINCE_STR='2020-10-01T00:00:00Z'`、`LIMIT=1500`、`PRICE_MODE='trade'`、`EXCHANGE_TYPE='usdm'`
   - 输出目录：`data/crypto/<symbol>/<timeframe>/...csv`（按脚本内部组织）
 
-2) 构建技术面与目标（full_merged.csv）
+1. 构建技术面与目标（full_merged.csv）
+
 ```bash
 python src/build_full_merged.py --periods 1h,4h,1d
 # 输出：data/merged/full_merged.csv
 # 如需生成 PKL：
 #   python src/csv2Pkl.py --src data/merged/full_merged.csv --dst data/pkl_merged/full_merged.pkl
 ```
-  参数（来自实际代码 src/build_full_merged.py）
-  - `--periods`：空格或逗号分隔，默认 `1h 4h 1d`（PowerShell 建议加引号，如 `'1h,4h,1d'`）
-  - `--indicated-root`：技术面输入根目录，默认 `data/crypto_indicated`
-  - `--targeted-root`：目标输出根目录，默认 `data/crypto_targeted_and_indicated`
-  - `--merged-out`：最终合并 CSV 路径，默认 `data/merged/full_merged.csv`
 
-3) 融合 Base/Rich（生成 full_merged_with_fundamentals.csv 及专家分组视图）
+参数（来自实际代码 src/build_full_merged.py）
+- `--periods`：空格或逗号分隔，默认 `1h 4h 1d`（PowerShell 建议加引号，如 `'1h,4h,1d'`）
+- `--indicated-root`：技术面输入根目录，默认 `data/crypto_indicated`
+- `--targeted-root`：目标输出根目录，默认 `data/crypto_targeted_and_indicated`
+- `--merged-out`：最终合并 CSV 路径，默认 `data/merged/full_merged.csv`
+
+1. 融合 Base/Rich（生成 full_merged_with_fundamentals.csv 及专家分组视图）
+
 ```bash
+# 方式一：直接运行脚本（推荐，更简洁）
+python src/fuse_fundamentals.py --config pipelines/configs/fuse_fundamentals.yaml
+# 或使用默认配置：
+python src/fuse_fundamentals.py
+
+# 方式二：Python -c 调用
 python -c "from src.fuse_fundamentals import run_with_config; \
   run_with_config('pipelines/configs/fuse_fundamentals.yaml')"
+
 # 关键配置：pipelines/configs/fuse_fundamentals.yaml
 # 输出：
 # - data/merged/full_merged_with_fundamentals.{csv,pkl}
 # - data/merged/expert_group/<Expert>_{base|rich}/full_merged_with_fundamentals.{csv,pkl}
 ```
-  说明（来自实际代码 src/fuse_fundamentals.py 与 datasets 配置）
-  - `configs/experts/<Expert>/datasets/{base,rich}.yaml`：
-    - `pinned_features`：默认保留特征
-    - `feature_list_path`：筛选特征清单路径（固定指向 `reports/feature_evidence/.../selected_features.txt`）
-    - `include_symbol/include_global`：Rich 模块选择开关
 
-4) 特征筛选（reports/feature_evidence + selected_features.txt）
+说明（来自实际代码 src/fuse_fundamentals.py 与 datasets 配置）
+- `configs/experts/<Expert>/datasets/{base,rich}.yaml`：
+  - `pinned_features`：默认保留特征
+  - `feature_list_path`：筛选特征清单路径（固定指向 `reports/feature_evidence/.../selected_features.txt`）
+  - `include_symbol/include_global`：Rich 模块选择开关
+
+1. 特征筛选（reports/feature_evidence + selected_features.txt）
+
 ```bash
-# 跑全部或指定专家（--experts）
+# 全量筛选（所有专家，Base+Rich双通道）
 python -m pipelines.run_feature_screening --config pipelines/configs/feature_selection.yaml
-# 产物：reports/feature_evidence/<Expert>/<base|rich>/selected_features.txt
-# 训练将固定从 datasets/<base|rich>.yaml 的 feature_list_path 指向的 reports 路径读取
+
+# 单个专家筛选
+python -m pipelines.run_feature_screening --config pipelines/configs/feature_selection.yaml --experts alpha_dir_tft
+
+# 多个专家筛选（逗号分隔）
+python -m pipelines.run_feature_screening --config pipelines/configs/feature_selection.yaml --experts alpha_dir_tft,risk_prob_tft,derivatives_micro
+
+# 指定通道筛选
+python -m pipelines.run_feature_screening --config pipelines/configs/feature_selection.yaml --experts alpha_dir_tft --enable-base
+python -m pipelines.run_feature_screening --config pipelines/configs/feature_selection.yaml --experts alpha_dir_tft --enable-rich
+python -m pipelines.run_feature_screening --config pipelines/configs/feature_selection.yaml --experts alpha_dir_tft --enable-base --enable-rich
+
+# 快速测试版（仅2个专家，1h周期，禁用时间置换）
+python -m pipelines.run_feature_screening --config pipelines/configs/feature_selection_quick.yaml
+
+# 跳过预聚合步骤（使用已有证据）
+python -m pipelines.run_feature_screening --config pipelines/configs/feature_selection.yaml --skip-pre-aggregation
 ```
 
-5) 开始训练（按专家/周期/模态）
+**参数说明：**
+- `--config`：配置文件路径，默认使用主配置或quick配置
+- `--experts`：指定专家键（逗号分隔），可选值：`alpha_dir_tft`, `alpha_ret_tft`, `risk_prob_tft`, `risk_reg_tft`, `derivatives_micro`, `onchain_fundflow`, `regime_gating`, `breakout_levels`, `relative_strength`, `factor_bridge`
+- `--enable-base`：仅启用Base通道筛选
+- `--enable-rich`：仅启用Rich通道筛选
+- `--skip-pre-aggregation`：跳过过滤和嵌入步骤，直接使用现有tree_perm结果进行聚合
+
+**产物：**
+- `reports/feature_evidence/<Expert>/<base|rich|comprehensive>/<period>/selected_features.txt`：各专家各通道各周期的筛选结果（例如：`reports/feature_evidence/Alpha-Dir-TFT/base/1h/selected_features.txt`）
+- `reports/feature_evidence/<Expert>/<base|rich|comprehensive>/<period>/aggregated_core.csv`：各周期的聚合评估表和证据链
+- `reports/feature_evidence/allowlist_core_common.txt`：跨专家跨周期的共同核心特征
+
+**训练集成：**训练时从 `configs/experts/<Expert>/datasets/<base|rich>.yaml` 的 `feature_list_path` 字段读取对应的 selected_features.txt 文件；训练脚本会根据当前训练的周期自动选择对应的特征文件（例如：`reports/feature_evidence/Expert/base/1h/selected_features.txt`）
+
+1. 开始训练（按专家/周期/模态）
 ```bash
 # 列出叶子配置
 python scripts/experts_cli.py list
@@ -86,7 +133,7 @@ python scripts/experts_cli.py warm   --expert Alpha-Dir-TFT --leaf 4h/base
 - 数据集 pinned/selected：`configs/experts/<Expert>/datasets/{base,rich}.yaml`
   - `pinned_features` 默认特征；`feature_list_path` 指向 `reports/feature_evidence/.../selected_features.txt`
 
-6) 训练后（可选）构建 OOF 与 Z 层训练数据
+1. 训练后（可选）构建 OOF 与 Z 层训练数据
 ```bash
 python pipelines/build_oof_for_z.py \
   --predictions-root lightning_logs \
@@ -94,7 +141,7 @@ python pipelines/build_oof_for_z.py \
   --output datasets/z_train.parquet
 ```
 
-7) 离线评估（预告）
+1. 离线评估（预告）
 ```bash
 # 计划中的离线评估脚本（预告，脚本暂未提供，示例仅作参考）
 # python scripts/offline_eval.py \
@@ -136,6 +183,12 @@ python pipelines/build_oof_for_z.py \
 - **融合执行**：通过`pipelines/configs/fuse_fundamentals.yaml`统一调度，支持多专家并行融合
 
   ```bash
+  # 方式一：直接运行脚本
+  python src/fuse_fundamentals.py --config pipelines/configs/fuse_fundamentals.yaml
+  # 或
+  python src/fuse_fundamentals.py
+  
+  # 方式二：Python -c 调用
   python -c "from src.fuse_fundamentals import run_with_config; run_with_config('pipelines/configs/fuse_fundamentals.yaml')"
   ```
 
@@ -410,7 +463,9 @@ python src/build_full_merged.py --periods 1h,4h # 仅 1h 与 4h
 2. **融合专家数据**
    ```bash
    # 为所有专家生成专用数据集
-   python -c "from src.fuse_fundamentals import run_with_config; run_with_config('pipelines/configs/fuse_fundamentals.yaml')"
+   python src/fuse_fundamentals.py  # 使用默认配置
+   # 或指定配置
+   python src/fuse_fundamentals.py --config pipelines/configs/fuse_fundamentals.yaml
    ```
 
 3. **特征筛选（可选）**
@@ -476,18 +531,18 @@ python src/build_full_merged.py --periods 1h,4h # 仅 1h 与 4h
 
 **核心细节**:
 
-1.  **输入数据源**:
-    *   **技术面数据**: 这通常是基础，包含了各个交易对的 OHLCV（开高低收成交量）等价格信息。
-    *   **链上/基本面数据**: 包括但不限于 ETF 资金流、宏观经济指标、链上活跃地址、持仓量（OI）、资金费率等。这些数据通常是全局性的，不与特定交易对绑定。
+1. **输入数据源**:
+   - **技术面数据**: 这通常是基础，包含了各个交易对的 OHLCV（开高低收成交量）等价格信息。
+   - **链上/基本面数据**: 包括但不限于 ETF 资金流、宏观经济指标、链上活跃地址、持仓量（OI）、资金费率等。这些数据通常是全局性的，不与特定交易对绑定。
 
-2.  **核心脚本与产出**:
-    *   **`src/build_full_merged.py`**:
-        *   **作用**: 这个脚本负责处理最基础的技术面数据，计算各种技术分析指标（TA Features），如 RSI, MACD, Bollinger Bands 等。
-        *   **产出**: 生成一个包含所有交易对、所有时间周期的基础技术指标宽表，通常保存为 `data/merged/full_merged.csv` 或 `.pkl` 文件。
-    *   **`src/fuse_fundamentals.py`**:
-        *   **作用**: 这是数据准备阶段的**关键一步**。它读取上一步生成的 `full_merged.pkl`，然后将**所有**链上数据、宏观数据等全局特征，通过时间戳对齐的方式，**融合**进去。
-        *   **输入**: `data/merged/full_merged.pkl` + 多个链上/基本面数据源。
-        *   **产出**: `data/merged/full_merged_with_fundamentals.pkl`。这个文件是整个项目后续步骤的**唯一数据来源**，它包含了特征筛选和模型训练可能用到的**所有**特征列。
+2. **核心脚本与产出**:
+   - **`src/build_full_merged.py`**:
+     - **作用**: 这个脚本负责处理最基础的技术面数据，计算各种技术分析指标（TA Features），如 RSI, MACD, Bollinger Bands 等。
+     - **产出**: 生成一个包含所有交易对、所有时间周期的基础技术指标宽表，通常保存为 `data/merged/full_merged.csv` 或 `.pkl` 文件。
+   - **`src/fuse_fundamentals.py`**:
+     - **作用**: 这是数据准备阶段的**关键一步**。它读取上一步生成的 `full_merged.pkl`，然后将**所有**链上数据、宏观数据等全局特征，通过时间戳对齐的方式，**融合**进去。
+     - **输入**: `data/merged/full_merged.pkl` + 多个链上/基本面数据源。
+     - **产出**: `data/merged/full_merged_with_fundamentals.pkl`。这个文件是整个项目后续步骤的**唯一数据来源**，它包含了特征筛选和模型训练可能用到的**所有**特征列。
 
 ### 第二阶段：特征筛选 (Feature Selection)
 
@@ -495,17 +550,17 @@ python src/build_full_merged.py --periods 1h,4h # 仅 1h 与 4h
 
 **核心细节**:
 
-1.  **输入数据源**:
-    *   **`data/merged/full_merged_with_fundamentals.pkl`**: 特征筛选流程**唯一**的数据输入。所有的筛选操作都是在这个大宽表上进行的。
+1. **输入数据源**:
+   - **`data/merged/full_merged_with_fundamentals.pkl`**: 特征筛选流程**唯一**的数据输入。所有的筛选操作都是在这个大宽表上进行的。
 
-2.  **核心脚本与逻辑**:
-    *   **入口**: `pipelines/run_feature_screening.py`。
-    *   **配置文件**: `pipelines/configs/feature_selection.yaml`，在这里定义了要为哪些专家、哪些数据集（`base`, `rich`, `comprehensive`）进行筛选。
-    *   **核心流水线**: `features/selection/run_pipeline.py`，它会按顺序执行多个筛选步骤（如过滤法、嵌入法等）。
+2. **核心脚本与逻辑**:
+   - **入口**: `pipelines/run_feature_screening.py`。
+   - **配置文件**: `pipelines/configs/feature_selection.yaml`，在这里定义了要为哪些专家、哪些数据集（`base`, `rich`, `comprehensive`）进行筛选。
+   - **核心流水线**: `features/selection/run_pipeline.py`，它会按顺序执行多个筛选步骤（如过滤法、嵌入法等）。
 
-3.  **产出**:
-    *   `reports/feature_evidence/` 目录下会生成详细的中间结果和最终产出。
-    *   **最关键的产出**: 每个专家、每个数据集类型对应的 `selected_features.txt` 文件（例如：`reports/feature_evidence/Alpha-Dir-TFT/rich/selected_features.txt`）。这个文件**每行包含一个特征名称**，是下一阶段的直接输入。
+3. **产出**:
+   - `reports/feature_evidence/` 目录下会生成详细的中间结果和最终产出。
+   - **最关键的产出**: 每个专家、每个数据集类型对应的 `selected_features.txt` 文件（例如：`reports/feature_evidence/Alpha-Dir-TFT/rich/selected_features.txt`）。这个文件**每行包含一个特征名称**，是下一阶段的直接输入。
 
 ### 第三阶段：配置同步 (Configuration Synchronization)
 
@@ -513,13 +568,13 @@ python src/build_full_merged.py --periods 1h,4h # 仅 1h 与 4h
 
 **核心细节**:
 
-1.  **数据配置更新**:
-    *   **需要修改的文件**: `configs/experts/{专家}/datasets/{数据集}.yaml` (例如 `base.yaml`)。
-    *   **操作**: 在这些文件中，添加或更新 `feature_list_path` 参数，使其**精确地指向**第二阶段生成的对应的 `selected_features.txt` 文件的路径。
+1. **数据配置更新**:
+   - **需要修改的文件**: `configs/experts/{专家}/datasets/{数据集}.yaml` (例如 `base.yaml`)。
+   - **操作**: 在这些文件中，添加或更新 `feature_list_path` 参数，使其**精确地指向**第二阶段生成的对应的 `selected_features.txt` 文件的路径。
 
-2.  **训练配置补全**:
-    *   **需要创建的目录**: 对于每个专家现有的**每个时间周期**（如 `1h`, `4h`），如果缺少 `comprehensive` 训练配置目录，就需要创建它。
-    *   **操作**: 以同周期下的 `rich` 目录为模板，将内部的 `model_config.yaml`, `targets.yaml` 等文件**完整地复制**到新建的 `comprehensive` 目录中。
+2. **训练配置补全**:
+   - **需要创建的目录**: 对于每个专家现有的**每个时间周期**（如 `1h`, `4h`），如果缺少 `comprehensive` 训练配置目录，就需要创建它。
+   - **操作**: 以同周期下的 `rich` 目录为模板，将内部的 `model_config.yaml`, `targets.yaml` 等文件**完整地复制**到新建的 `comprehensive` 目录中。
 
 ### 第四阶段：模型训练 (Model Training)
 
@@ -624,34 +679,34 @@ python -m features.selection.tft_gating --ckpt <你的ckpt路径> --out reports/
 | 分类 | 文件 / 目录名 | 意义和作用 |
 | :--- | :--- | :--- |
 | **输入配置** | `allowlist_*.txt`, `core_allowlist.txt` | **特征白名单**：定义了哪些特征可以进入筛选流程。`core`为通用核心特征，带专家名的为该专家专属的额外特征。 |
-| **过程证据** | `base/` 和 `rich/` | **并行筛选策略**：分别代表从“基础特征集”和“丰富特征集”出发的两套独立的、完整的筛选流程。 |
-| | └ `stage1_filter/` | **阶段一：过滤法**。存放基于统计指标（如IC/MI、缺失率、方差）的快速初筛结果和证据。 |
-| | └ `stage2_embedded/` | **阶段二：嵌入法**。存放基于多种模型（如树模型、线性模型）评估特征重要性的详细证据。 |
-| | └ `tree_perm/` | **专项验证：排列重要性**。通过更耗时但更可靠的排列重要性方法，在不同时间周期下验证特征的稳健性。 |
-| **决策汇总** | `aggregated_core.csv` | **聚合评估表**：**最关键的决策依据文件**。它汇总了所有过程证据，为每个特征计算最终综合得分、稳健性和排名。 |
-| **最终产出** | `selected_features.txt` | **最终选定特征集**：**最重要的产出**，基于 `aggregated_core.csv` 的评估生成的默认特征列表，直接用于模型训练。 |
-| | `optimized_features.txt` | **优化特征集**：可能是 `selected_features` 的子集，例如在剔除共线性特征后得到，追求更高的模型效率和鲁棒性。 |
-| | `plus_features.txt` | **增强特征集**：在 `selected_features` 基础上增加了一些有潜力的候选特征，用于实验性或更复杂的模型。 |
+| **过程证据** | `<channel>/` | **并行筛选策略**：分别代表从"基础特征集"和"丰富特征集"出发的两套独立的、完整的筛选流程。 |
+| | └ `<period>/stage1_filter/` | **阶段一：过滤法**。存放基于统计指标（如IC/MI、缺失率、方差）的快速初筛结果和证据。 |
+| | └ `<period>/stage2_embedded/` | **阶段二：嵌入法**。存放基于多种模型（如树模型、线性模型）评估特征重要性的详细证据。 |
+| | └ `<period>/tree_perm/` | **专项验证：排列重要性**。通过更耗时但更可靠的排列重要性方法，验证特征在该周期的稳健性。 |
+| **决策汇总** | `<period>/aggregated_core.csv` | **聚合评估表**：**最关键的决策依据文件**。它汇总了该周期的过程证据，为每个特征计算最终综合得分、稳健性和排名。 |
+| **最终产出** | `<period>/selected_features.txt` | **最终选定特征集**：**最重要的产出**，基于该周期 `aggregated_core.csv` 的评估生成的特征列表，直接用于该周期的模型训练。 |
+| | `<period>/optimized_features.txt` | **优化特征集**：该周期的优化特征子集，追求更高的模型效率和鲁棒性。 |
+| | `<period>/plus_features.txt` | **增强特征集**：该周期的增强特征集合，用于实验性或更复杂的模型。 |
 
 <br>
 
 
-- 每位专家/通道的中间产物：
-  - `reports/feature_evidence/<Expert>/<base|rich>/stage1_filter/`：
+- 每位专家/通道/周期的中间产物：
+  - `reports/feature_evidence/<Expert>/<base|rich>/<period>/stage1_filter/`：
     - `allowlist.txt`：过滤后保留下来的特征
     - `filter_stats.csv`：coverage / variance 等统计
     - `ic_mi.csv`：IC/MI 证据
-  - `reports/feature_evidence/<Expert>/<base|rich>/stage2_embedded/`：
+  - `reports/feature_evidence/<Expert>/<base|rich>/<period>/stage2_embedded/`：
     - `raw_scores.csv` / `summary.csv`：内嵌式得分与排名
     - `allowlist_embedded.txt`：按综合得分排序的候选清单
-  - `reports/feature_evidence/<Expert>/<base|rich>/tree_perm/`：
-    - `<period>/<target>_importances.csv`：树重要性 + 置换 Δ 及排名
-    - `summary.csv`：跨周期×目标聚合后的明细
+  - `reports/feature_evidence/<Expert>/<base|rich>/<period>/tree_perm/`：
+    - `<target>_importances.csv`：树重要性 + 置换 Δ 及排名
+    - `summary.csv`：该周期各目标聚合后的明细
 
 - 聚合与最终清单：
-  - `reports/feature_evidence/<Expert>/aggregated_core.csv`：核心集合与统计
-  - `configs/selected_features.txt`：训练用清单，已改为“核心集 ∪ 当前专家通道的 pinned 默认集”
-  - `plus_features.txt` / `optimized_features.txt`：包装式搜索的增强或优化集合
+  - `reports/feature_evidence/<Expert>/<channel>/<period>/aggregated_core.csv`：各周期的核心集合与统计
+  - `reports/feature_evidence/<Expert>/<channel>/<period>/selected_features.txt`：各周期的训练用特征清单
+  - `reports/feature_evidence/<Expert>/<channel>/<period>/plus_features.txt` / `optimized_features.txt`：各周期的包装式搜索增强或优化集合
   - `<Expert>/summary.json`：本次筛选摘要（通道统计、Wrapper 结果、可选的后验验证）
 
 ### 新增专家接入（让特征筛选可跑）
@@ -670,6 +725,10 @@ python -m features.selection.tft_gating --ckpt <你的ckpt路径> --out reports/
 3) 执行融合，生成专家视图
 
 ```bash
+# 直接运行脚本（推荐）
+python src/fuse_fundamentals.py --config pipelines/configs/fuse_fundamentals.yaml
+
+# 或 Python -c 调用
 python -c "from src.fuse_fundamentals import run_with_config; run_with_config('pipelines/configs/fuse_fundamentals.yaml')"
 ```
 
@@ -778,7 +837,3 @@ python train_multi_tft.py --config configs/experts/Custom-Expert/1h/base/model_c
 ## 历史版本亮点
 ### 2025-09-28 — 专家体系全面升级与9+1架构完整实现（v0.2.8）
 #### 专家架构全面升级
-
-```
-
-```

@@ -1118,7 +1118,7 @@ def fuse(
 
         # 可选：时间连续性审计（依赖本地工具，不存在则跳过）
         try:
-            from src.prune_and_time_audit import audit_time
+            from pipelines.prune_and_time_audit import audit_time
             sum_df, gaps_df = audit_time(merged, out_csv)
             if not sum_df.empty:
                 sum_df.to_csv(os.path.join(rep, 'time_audit_summary.csv'), index=False)

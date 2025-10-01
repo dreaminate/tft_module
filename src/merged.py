@@ -48,8 +48,12 @@ def merged_main(base_dir: str, output_path: str, symbols: list[str], periods: li
     def inner(base_dir: str = base_dir, output_path: str = output_path,
               symbols: list[str] = symbols, periods: list[str] = periods):
         all_dfs = []
+        period_window_map = {"1h": 96, "4h": 56, "1d": 30}
+        
         for period in periods:
             period_dir = os.path.join(base_dir, period)
+            current_window = period_window_map.get(period, 96)
+            
             for symbol in symbols:
                 file_name = f"{symbol}_{period}_all.csv"
                 file_path = os.path.join(period_dir, file_name)
@@ -66,6 +70,35 @@ def merged_main(base_dir: str, output_path: str, symbols: list[str], periods: li
                 df.drop(columns=tri_cols, inplace=True)
                 if tri_cols:
                     print(f"[✅] 删除三分类字段: {tri_cols}")
+
+                # 🔧 新增：清理不匹配的归一化列，避免合并后产生NaN
+                other_windows = [w for w in period_window_map.values() if w != current_window]
+                cols_to_drop = []
+                for col in df.columns:
+                    # 检查是否为其他周期的归一化特征
+                    for other_win in other_windows:
+                        if col.endswith(f"_zn{other_win}") or col.endswith(f"_mm{other_win}"):
+                            cols_to_drop.append(col)
+                            break
+                
+                if cols_to_drop:
+                    df.drop(columns=cols_to_drop, inplace=True)
+                    print(f"[🧹] {period}-{symbol}: 清理不匹配归一化列 {len(cols_to_drop)} 个")
+
+                # 🔧 新增：清理目标生成阶段遗留的NaN
+                # 检查是否有rolling window产生的NaN没有被清理
+                nan_cols = [col for col in df.columns if df[col].isna().any()]
+                if nan_cols:
+                    print(f"[⚠️] {period}-{symbol}: 发现NaN列 {len(nan_cols)} 个: {nan_cols[:5]}")
+                    # 删除有NaN的行（只针对特征列，保留目标列）
+                    feature_nan_cols = [col for col in nan_cols 
+                                      if not col.startswith('target_') 
+                                      and col not in ['symbol', 'period', 'datetime', 'timestamp', 'time_idx']]
+                    if feature_nan_cols:
+                        before_len = len(df)
+                        df = df.dropna(subset=feature_nan_cols, how='any')
+                        after_len = len(df)
+                        print(f"[🧽] {period}-{symbol}: 清理特征NaN，删除 {before_len-after_len} 行")
 
                 all_dfs.append(df)
 

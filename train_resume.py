@@ -123,6 +123,91 @@ def _require_leaf_yaml(cfg_path: str, filenames: list[str]) -> dict:
     return found
 
 
+def _find_latest_checkpoint_in_dir(dir_path: str) -> Optional[str]:
+    if not dir_path or not os.path.isdir(dir_path):
+        return None
+    ckpts = []
+    try:
+        for name in os.listdir(dir_path):
+            if name.endswith(".ckpt"):
+                ckpts.append(os.path.join(dir_path, name))
+    except FileNotFoundError:
+        return None
+    if not ckpts:
+        return None
+    for p in ckpts:
+        if os.path.basename(p) == "last.ckpt":
+            return p
+    ckpts.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+    return ckpts[0]
+
+
+def _resolve_ckpt_from_config(raw_ckpt: Optional[str], cfg_path: str) -> Optional[str]:
+    if not raw_ckpt:
+        return None
+    if isinstance(raw_ckpt, str):
+        candidates = []
+        if os.path.isabs(raw_ckpt):
+            candidates.append(raw_ckpt)
+        else:
+            leaf_dir = os.path.dirname(os.path.abspath(cfg_path))
+            candidates.append(os.path.join(leaf_dir, raw_ckpt))
+            candidates.append(os.path.abspath(raw_ckpt))
+        for cand in candidates:
+            if os.path.isdir(cand):
+                found = _find_latest_checkpoint_in_dir(cand)
+                if found:
+                    return found
+            if os.path.exists(cand):
+                return cand
+    return None
+
+
+def _auto_discover_resume_ckpt(
+    cfg_path: str,
+    model_cfg: dict,
+    expert_name: Optional[str],
+    period: Optional[str],
+    modality: Optional[str],
+    model_type: Optional[str],
+) -> tuple[Optional[str], list[str]]:
+    search_dirs: list[str] = []
+    checked: list[str] = []
+    leaf_dir = os.path.dirname(os.path.abspath(cfg_path))
+    raw_dirs = model_cfg.get("resume_search_dirs")
+    if isinstance(raw_dirs, (list, tuple)):
+        for entry in raw_dirs:
+            if not entry:
+                continue
+            if os.path.isabs(entry):
+                search_dirs.append(entry)
+            else:
+                search_dirs.append(os.path.join(leaf_dir, entry))
+                search_dirs.append(entry)
+    exp_name = expert_name or "default"
+    per = str(period or "_")
+    mod = str(modality or "_")
+    mtype = model_type or "tft"
+    search_dirs.extend([
+        os.path.join("checkpoints", "experts", exp_name, per, mod, mtype),
+        os.path.join(leaf_dir, "checkpoints"),
+        leaf_dir,
+    ])
+    seen = set()
+    for d in search_dirs:
+        if not d:
+            continue
+        norm = os.path.abspath(d)
+        if norm in seen:
+            continue
+        seen.add(norm)
+        checked.append(norm)
+        candidate = _find_latest_checkpoint_in_dir(norm)
+        if candidate and os.path.exists(candidate):
+            return candidate, checked
+    return None, checked
+
+
 def main():
     args = _parse_args()
     cfg_path = args.config
@@ -130,14 +215,6 @@ def main():
     with open(cfg_path, "r", encoding="utf-8") as f:
         model_cfg = yaml.safe_load(f)
 
-    resume_ckpt = model_cfg.get("resume_ckpt")
-    assert resume_ckpt and os.path.exists(resume_ckpt), f"Checkpoint 未找到: {resume_ckpt}"
-    print(f"🔄 从 checkpoint 续训: {resume_ckpt}")
-
-    inferred = _extract_meta_from_cfg_path(cfg_path)
-    expert_name = args.expert or model_cfg.get("expert") or inferred.get("expert")
-    exp_name = expert_name or "default"
-    # 叶子 targets.yaml 决定训练目标
     leaf_dir = os.path.dirname(os.path.abspath(cfg_path))
     tpath = os.path.join(leaf_dir, "targets.yaml")
     assert os.path.exists(tpath), f"缺少叶子 targets.yaml: {tpath}"
@@ -148,6 +225,28 @@ def main():
     if model_type != "tft":
         raise NotImplementedError(f"model_type '{model_type}' not supported yet")
 
+    inferred = _extract_meta_from_cfg_path(cfg_path)
+    expert_name = args.expert or model_cfg.get("expert") or inferred.get("expert")
+    exp_name = expert_name or "default"
+    period_hint = model_cfg.get("period") or inferred.get("period")
+    modality_hint = model_cfg.get("modality_set") or model_cfg.get("modality") or inferred.get("modality")
+
+    resume_ckpt = _resolve_ckpt_from_config(model_cfg.get("resume_ckpt"), cfg_path)
+    checked_dirs: list[str] = []
+    if not resume_ckpt or not os.path.exists(resume_ckpt):
+        resume_ckpt, checked_dirs = _auto_discover_resume_ckpt(
+            cfg_path,
+            model_cfg,
+            expert_name,
+            period_hint,
+            modality_hint,
+            model_type,
+        )
+    if not resume_ckpt or not os.path.exists(resume_ckpt):
+        hint = "; ".join(checked_dirs) if checked_dirs else "<无自动搜索路径>"
+        raise FileNotFoundError(f"未能定位续训 checkpoint。请在 model_config.yaml 中设置 resume_ckpt，或将权重放入以下目录之一: {hint}")
+    print(f"🔄 从 checkpoint 续训: {resume_ckpt}")
+
     output_head_cfg = leaf_targets_obj.get("output_head") or {}
     symbol_weight_cfg = leaf_targets_obj.get("symbol_weights") or {}
 
@@ -155,7 +254,25 @@ def main():
     # 基于配置过滤周期/符号（若给出）
     cfg_period = model_cfg.get("period") or inferred.get("period")
     cfg_symbols = model_cfg.get("symbols") or ([] if inferred.get("symbol") is None else [inferred.get("symbol")])
-    sel_feats_path = _find_nearby_config("selected_features.txt", cfg_path, expert_name)
+
+    # 获取数据集配置声明的 reports 路径
+    ds_feature_list_path = dataset_cfg.get("feature_list_path") if isinstance(dataset_cfg, dict) else None
+
+    # 根据当前训练的周期动态调整特征文件路径
+    if ds_feature_list_path and cfg_period:
+        # 如果配置了feature_list_path且有period信息，则根据周期动态构建路径
+        import re
+        # 匹配reports/feature_evidence/Expert/channel/selected_features.txt格式
+        pattern = r'(reports/feature_evidence/[^/]+/[^/]+/)selected_features\.txt'
+        match = re.search(pattern, ds_feature_list_path)
+        if match:
+            base_path = match.group(1)
+            sel_feats_path = f"{base_path}{cfg_period}/selected_features.txt"
+        else:
+            # 如果不匹配预期格式，使用原有路径
+            sel_feats_path = ds_feature_list_path
+    else:
+        sel_feats_path = _find_nearby_config("selected_features.txt", cfg_path, expert_name)
 
     train_loader, val_loader, target_names, train_ds, periods ,norm_pack= get_dataloaders(
         data_path=model_cfg["data_path"],
@@ -302,7 +419,12 @@ def main():
     if strategy is not None:
         trainer_kwargs["strategy"] = strategy
     trainer = Trainer(**trainer_kwargs)
-    trainer.fit(model, train_dataloaders=train_loader, val_dataloaders=val_loader)
+    trainer.fit(
+        model,
+        train_dataloaders=train_loader,
+        val_dataloaders=val_loader,
+        ckpt_path=resume_ckpt,
+    )
 
     # ===== 完成 =====
     print("🔚 续训完成")

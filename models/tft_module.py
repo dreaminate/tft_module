@@ -52,6 +52,25 @@ class HybridMultiLoss(nn.Module):
                 details[name] = {"raw": li.detach(), "weighted": weighted.detach()}
         return (total_loss, details) if return_dict else total_loss
 
+    @property
+    def latest_stats(self):
+        available: list[tuple[str, dict]] = []
+        for name, module in zip(self.loss_names, self.losses):
+            stats = getattr(module, "latest_stats", None)
+            if stats:
+                available.append((name, stats))
+        if not available:
+            return None
+        use_prefix = len(available) > 1
+        merged: dict[str, float] = {}
+        for name, stats in available:
+            for key, value in stats.items():
+                if isinstance(value, torch.Tensor):
+                    value = float(value.detach().item())
+                merged_key = f"{name}.{key}" if use_prefix else key
+                merged[merged_key] = float(value) if isinstance(value, (int, float)) else value
+        return merged
+
 
 class MyTFTModule(LightningModule):
     def __init__(
@@ -378,6 +397,7 @@ class MyTFTModule(LightningModule):
         y_list = self._parse_y_to_list(y, n_targets_expected=n_targets)
         y_enc = self._stack_y(y_list, self.device)
         y_for_loss = self._standardize_y(y_enc, sym_idx, per_idx)
+        batch_sz = y_enc.size(0)
         sample_weights = None
         if hasattr(self, "sym_weight_tensor") and self.sym_weight_tensor is not None:
             w_batch = self.sym_weight_tensor.index_select(0, sym_idx).view(-1)
@@ -391,15 +411,15 @@ class MyTFTModule(LightningModule):
         reg_term = self._symbol_head_regularization()
         if reg_term is not None:
             weighted_total = weighted_total + reg_term
-            self.log(f"{stage}/affine_reg", reg_term, on_step=False, on_epoch=True, prog_bar=False, batch_size=y_enc.size(0))
+            self.log(f"{stage}/affine_reg", reg_term, on_step=False, on_epoch=True, prog_bar=False, batch_size=batch_sz)
         raws = torch.stack([v["raw"] for v in sub_losses.values()])
         w = self.loss_fn.w.to(raws)
         raw_total = (raws * w).sum()
 
-        loss_stats = getattr(self.loss_fn.loss_fn, "latest_stats", None)
+        loss_stats = getattr(self.loss_fn, "latest_stats", None)
         if loss_stats:
             for k, v in loss_stats.items():
-                self.log(f"{stage}/loss_{k}", v, on_step=False, on_epoch=True, prog_bar=False)
+                self.log(f"{stage}/loss_{k}", v, on_step=False, on_epoch=True, prog_bar=False, batch_size=batch_sz)
 
         # Optionally log detailed components (epoch-level only)
         if bool(self.hparams.get("detailed_logging", False)):
@@ -409,11 +429,11 @@ class MyTFTModule(LightningModule):
                 on_step=False,
                 on_epoch=True,
                 prog_bar=False,
-                batch_size=y_enc.size(0),
+                batch_size=batch_sz,
             )
             for name, item in sub_losses.items():
-                self.log(f"{stage}/{name}_raw", item["raw"], on_step=False, on_epoch=True, batch_size=y_enc.size(0))
-                self.log(f"{stage}/{name}_w", item["weighted"], on_step=False, on_epoch=True, batch_size=y_enc.size(0))
+                self.log(f"{stage}/{name}_raw", item["raw"], on_step=False, on_epoch=True, batch_size=batch_sz)
+                self.log(f"{stage}/{name}_w", item["weighted"], on_step=False, on_epoch=True, batch_size=batch_sz)
         return weighted_total, preds_bt, y_enc, x, sym_idx, per_idx
 
     def on_validation_epoch_start(self):
@@ -468,32 +488,34 @@ class MyTFTModule(LightningModule):
         preds_eval, y_eval = self._destandardize_pred_and_true(preds, y_enc, sym_idx, per_idx)
         period_idx = x["groups"][:, self.period_group_idx].to(self.device)
 
+        batch_sz = period_idx.size(0)
+
         if self.cls_target_idx:
             probs = torch.sigmoid(preds[:, self.cls_target_idx])
             self.log(
-                f"{stage}/cls_prob_mean",
+                "val/cls_prob_mean",
                 probs.mean(),
                 on_step=False,
                 on_epoch=True,
                 prog_bar=False,
-                batch_size=probs.numel(),
+                batch_size=batch_sz,
             )
             self.log(
-                f"{stage}/cls_prob_std",
+                "val/cls_prob_std",
                 probs.std(unbiased=False),
                 on_step=False,
                 on_epoch=True,
                 prog_bar=False,
-                batch_size=probs.numel(),
+                batch_size=batch_sz,
             )
             pred_pos_rate = (probs > 0.5).float().mean()
             self.log(
-                f"{stage}/pred_pos_rate@0.5",
+                "val/pred_pos_rate@0.5",
                 pred_pos_rate,
                 on_step=False,
                 on_epoch=True,
                 prog_bar=False,
-                batch_size=probs.numel(),
+                batch_size=batch_sz,
             )
 
         for idx, metric in enumerate(self.metrics_list):

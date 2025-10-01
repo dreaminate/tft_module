@@ -115,6 +115,32 @@ def get_dataloaders(
     df["symbol"] = df["symbol"].astype(str)
     df["period"] = df["period"].astype(str)
 
+    numeric_cols = [
+        c
+        for c in df.columns
+        if np.issubdtype(df[c].dtype, np.number)
+        and c not in {"time_idx"}
+    ]
+    nan_fill_summary = {
+        "total_nan_before": int(df[numeric_cols].isna().sum().sum()) if numeric_cols else 0,
+        "zero_filled_columns": [],
+    }
+    if numeric_cols:
+        df[numeric_cols] = df.groupby(["symbol", "period"], group_keys=False)[numeric_cols].ffill()
+        df[numeric_cols] = df.groupby(["symbol", "period"], group_keys=False)[numeric_cols].bfill()
+        remaining_nan = df[numeric_cols].isna().sum()
+        nan_fill_summary["total_nan_after_ffill_bfill"] = int(remaining_nan.sum())
+        still_missing_cols = remaining_nan[remaining_nan > 0].index.tolist()
+        if still_missing_cols:
+            df[still_missing_cols] = df[still_missing_cols].fillna(0.0)
+            nan_fill_summary["zero_filled_columns"] = still_missing_cols
+            nan_fill_summary["total_nan_after_fillna"] = int(df[numeric_cols].isna().sum().sum())
+        else:
+            nan_fill_summary["total_nan_after_fillna"] = int(remaining_nan.sum())
+    else:
+        nan_fill_summary["total_nan_after_ffill_bfill"] = 0
+        nan_fill_summary["total_nan_after_fillna"] = 0
+
     # --- 全局时间划分 ---
     if val_mode == "days":
         val_cutoff_date = df["datetime"].max() - pd.Timedelta(days=val_days)
@@ -194,11 +220,85 @@ def get_dataloaders(
     # 合并 allowlist 和 pinned features，去重
     combined_features = list(dict.fromkeys(allowlist + pinned_features))
     
+    # 🔧 修复：始终执行特征过滤，确保只使用存在且有效的特征
+    available_cols = set(df_train.columns)
+    
+    # 🎯 智能归一化特征匹配：根据当前周期推断正确的窗口后缀
+    def _smart_feature_match(feature_list, available_cols, periods_in_data=None):
+        """智能匹配特征，特别是归一化特征的窗口后缀"""
+        matched_features = []
+        period_window_map = {"1h": 96, "4h": 56, "1d": 30}
+        
+        # 如果有周期信息，确定当前主要周期的窗口大小
+        dominant_windows = []
+        if periods_in_data:
+            for p in periods_in_data:
+                if str(p) in period_window_map:
+                    dominant_windows.append(period_window_map[str(p)])
+        if not dominant_windows:
+            dominant_windows = [96, 56, 30]  # 默认尝试所有窗口
+        
+        for feat in feature_list:
+            if feat in available_cols:
+                matched_features.append(feat)
+            elif "_zn" in feat or "_mm" in feat:
+                # 尝试智能匹配归一化特征
+                if "_zn" in feat:
+                    base_feat = feat.split("_zn")[0]
+                    method = "_zn"
+                else:
+                    base_feat = feat.split("_mm")[0]
+                    method = "_mm"
+                
+                found = False
+                for window in dominant_windows:
+                    candidate = f"{base_feat}{method}{window}"
+                    if candidate in available_cols:
+                        matched_features.append(candidate)
+                        found = True
+                        break
+                
+                if not found:
+                    print(f"  ⚠️ 归一化特征 {feat} 未找到匹配项")
+            else:
+                print(f"  ❌ 特征不存在: {feat}")
+        
+        return matched_features
+    
     if combined_features:
-        # 验证特征是否存在于 DataFrame 中
-        available_cols = set(df_train.columns)
-        final_features = [f for f in combined_features if f in available_cols]
+        # 使用配置指定的特征（智能匹配归一化特征）
+        current_periods = [str(p) for p in periods] if periods else None
+        final_features = _smart_feature_match(combined_features, available_cols, current_periods)
         unknown_reals = [c for c in unknown_reals if c in final_features]
+        print(f"✅ 使用配置特征: {len(final_features)}/{len(combined_features)} 可用（含智能匹配）")
+    else:
+        # 🔧 修复：当没有配置特征时，使用所有可用的非全NaN特征（而不是跳过过滤）
+        print("⚠️ 无特征配置，使用所有有效特征（去除全NaN列）")
+        # 只保留非全NaN且数据质量好的特征
+        valid_features = []
+        for c in unknown_reals:
+            if c in available_cols:
+                col_data = df_train[c]
+                # 检查列的有效性：非全NaN，且有效值比例>5%
+                valid_ratio = col_data.notna().mean()
+                if valid_ratio > 0.05:  # 至少5%的值是有效的
+                    valid_features.append(c)
+                else:
+                    print(f"  ❌ 跳过列 {c}: 有效值比例仅 {valid_ratio:.1%}")
+        
+        unknown_reals = valid_features
+        print(f"✅ 自动筛选有效特征: {len(unknown_reals)}/{len(unknown_reals_before)}")
+    
+    # 🧹 额外清理：移除内存中不需要的归一化列
+    norm_cols_to_remove = []
+    for col in df_train.columns:
+        if ("_zn" in col or "_mm" in col) and col not in unknown_reals and col not in known_reals:
+            norm_cols_to_remove.append(col)
+    
+    if norm_cols_to_remove:
+        print(f"🧹 清理无用归一化列: {len(norm_cols_to_remove)} 个")
+        df_train = df_train.drop(columns=norm_cols_to_remove, errors='ignore')
+        df_val = df_val.drop(columns=norm_cols_to_remove, errors='ignore')
     # 汇总特征信息，用于训练阶段打印/落盘
     features_meta = {
         "selected_allowlist": allowlist,
@@ -210,6 +310,7 @@ def get_dataloaders(
         "known_reals": list(known_reals),
         "static_categoricals": list(kwargs.get("static_categoricals", ["symbol", "period"]) or ["symbol", "period"]),
         "static_reals": list(kwargs.get("static_reals", []) or []),
+        "nan_fill_summary": nan_fill_summary,
     }
     # 数据规模摘要
     def _vc(dff, col):

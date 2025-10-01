@@ -1,5 +1,38 @@
 ﻿# 更新日志
 
+## 2025-10-01 — 特征筛选按周期独立与训练动态路径选择（v0.2.9）
+
+### 特征筛选周期独立改造
+- **按周期独立筛选**：彻底改造特征筛选管线，每个周期独立运行完整筛选流程（Filter→Embedded→Tree+Perm→Aggregation），不再跨周期聚合
+- **输出结构重组**：特征筛选结果按周期组织 `reports/feature_evidence/<Expert>/<channel>/<period>/`，确保每个周期获得针对其市场特征优化的特征集合
+- **训练集成优化**：训练脚本自动根据当前训练周期动态选择对应的特征文件，无需手动干预
+
+### 训练系统动态路径选择
+- **智能特征路径**：`train_multi_tft.py`、`train_resume.py`、`warm_start_train.py` 新增动态路径选择逻辑，根据模型配置中的`period`自动构建正确的特征文件路径
+- **向下兼容性**：保持原有配置文件格式，无需修改大量配置，支持平滑过渡到新的周期独立特征筛选模式
+- **自动化工作流**：训练时自动匹配 `reports/feature_evidence/Expert/channel/period/selected_features.txt`，实现完全自动化
+
+### 核心优势
+- **周期特异性**：每个周期（1h/4h/1d）拥有独立优化的特征集合，完美匹配该周期的市场特征
+- **训练效率**：避免不必要的跨周期特征混合，提高特征质量和训练效率
+- **维护便利**：清晰的按周期组织结构，便于调试和特征分析
+- **扩展灵活**：为未来添加新周期或修改周期特定逻辑提供了良好基础
+
+### 影响文件（关键）
+- `pipelines/run_feature_screening.py`：核心筛选逻辑改造，支持按周期独立处理
+- `train_multi_tft.py`、`train_resume.py`、`warm_start_train.py`：新增动态特征路径选择
+- `README.md`：更新文档描述，反映新的目录结构和使用方式
+
+### 使用示例
+```bash
+# 特征筛选 - 每个周期独立筛选
+python -m pipelines.run_feature_screening --config pipelines/configs/feature_selection.yaml --experts alpha_dir_tft
+
+# 训练 - 自动选择对应周期的特征文件
+python scripts/experts_cli.py train --expert Alpha-Dir-TFT --leaf 1h/base  # 自动使用1h特征
+python scripts/experts_cli.py train --expert Alpha-Dir-TFT --leaf 4h/base  # 自动使用4h特征
+```
+
 ## 2025-09-28 — 专家体系全面升级与9+1架构完整实现（v0.2.8）
 
 ### 专家架构全面升级
@@ -450,13 +483,6 @@
 
 - 不影响现有功能；可逐步实现。
 
-- **Feature Management Overhaul**:
-  - **Centralized Static Features**: Introduced `pinned_features` section in `configs/experts/**/datasets/*.yaml` files. This now serves as the single source of truth for static (default) features for each expert and modality (`base`, `rich`, etc.), ensuring consistency with the feature selection pipeline.
-  - **Decoupled Feature Loading**: Modified the training pipeline (`train_multi_tft.py` and `data/load_dataset.py`) to read `pinned_features` from the new YAML configs.
-  - **Combined Feature Set**: The final feature set for training is now a robust union of:
-    1.  Statically defined `pinned_features` from `datasets.yaml`.
-    2.  Dynamically selected alpha features from `selected_features.txt`.
-  - This resolves the issue of missing base features during training and aligns the codebase with a more robust, config-driven design, removing the need for manual file copying.
 
 ## 2025-09-28 — 训练稳定化与配置集中（val_loss-only + 特征/数据摘要）
 

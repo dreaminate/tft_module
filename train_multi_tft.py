@@ -203,9 +203,25 @@ def main():
     else:
         leaf_weights_yaml = os.path.join(leaf_dir, "weights_config.yaml")
         weight_cfg = load_yaml(leaf_weights_yaml) if os.path.exists(leaf_weights_yaml) else {}
-    # 总是去数据集配置声明的 reports 路径查找 selected 列表；若未声明，再回退到就近 selected_features.txt
+    # 获取数据集配置声明的 reports 路径
     ds_feature_list_path = dataset_cfg.get("feature_list_path") if isinstance(dataset_cfg, dict) else None
-    if ds_feature_list_path:
+
+    # 根据当前训练的周期动态调整特征文件路径
+    current_period = model_cfg.get("period")
+    if ds_feature_list_path and current_period:
+        # 如果配置了feature_list_path且有period信息，则根据周期动态构建路径
+        # 将路径中的文件名部分替换为包含周期信息的路径
+        import re
+        # 匹配reports/feature_evidence/Expert/channel/selected_features.txt格式
+        pattern = r'(reports/feature_evidence/[^/]+/[^/]+/)selected_features\.txt'
+        match = re.search(pattern, ds_feature_list_path)
+        if match:
+            base_path = match.group(1)
+            sel_feats_path = f"{base_path}{current_period}/selected_features.txt"
+        else:
+            # 如果不匹配预期格式，使用原有路径
+            sel_feats_path = ds_feature_list_path
+    elif ds_feature_list_path:
         sel_feats_path = ds_feature_list_path
     else:
         sel_feats_path = _find_nearby_config("selected_features.txt", cfg_path, expert_name)

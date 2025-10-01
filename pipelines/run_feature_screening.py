@@ -353,6 +353,7 @@ def main():
             intersect_path = _build_intersect_dataset(name, pkl_base, pkl_rich, out_root=os.path.join("data", "merged", "expert_group"))
         periods = ex.get("periods", ["1h", "4h", "1d"]) if isinstance(ex.get("periods"), list) else ["1h", "4h", "1d"]
 
+        # 预设专家级别的参数（这些参数在所有周期中共享）
         filter_params_base = {**filter_params_default, **(filter_per_channel.get("base") or {})}
         filter_params_rich = {**filter_params_default, **(filter_per_channel.get("rich") or {})}
         # 若未指定 ic/mi 目标，使用并集拆分
@@ -373,128 +374,134 @@ def main():
 
         block_len_map = block_len_by_period if isinstance(block_len_by_period, dict) else {}
 
-        tree_out_base = os.path.join(tree_out_root, name, "base", "tree_perm")
-        tree_out_rich = os.path.join(tree_out_root, name, "rich", "tree_perm")
-        _ensure_dir(tree_out_base)
-        _ensure_dir(tree_out_rich)
-
         print(f"\n[{idx}/{total}] Expert: {name} | periods={periods} | base={pkl_base} | rich={pkl_rich}")
-        step_t0 = time.time()
-        try:
-            allow_base: Optional[str] = None
-            allow_rich: Optional[str] = None
-            res_base = None
-            res_rich = None
 
-            if not args.skip_pre_aggregation:
-                if enable_base and filter_enabled and pkl_base:
-                    try:
-                        res_base = run_filter_for_channel(
-                            expert_name=name,
-                            channel="base",
-                            pkl_path=onchain_paths.get("base_pkl") or pkl_base,
-                            val_mode=outer.get("mode", "days"),
-                            val_days=int(outer.get("days", 90)),
-                            val_ratio=float(outer.get("ratio", 0.2)),
-                            allowlist_path=onchain_paths.get("allowlist_base"),
-                            params_dict=filter_params_base,
-                        )
-                        allow_base = str(res_base.allowlist_path)
-                        print(f"  [filter] base keep={len(res_base.keep_features)}")
-                    except Exception as fe:  # pragma: no cover - defensive
-                        print(f"  [filter-warn] base channel failed: {fe}")
-                if enable_rich and filter_enabled and (pkl_rich or onchain_paths.get("rich_pkl")):
-                    try:
-                        res_rich = run_filter_for_channel(
-                            expert_name=name,
-                            channel="rich",
-                            pkl_path=onchain_paths.get("rich_pkl") or pkl_rich,
-                            val_mode=outer.get("mode", "days"),
-                            val_days=int(outer.get("days", 90)),
-                            val_ratio=float(outer.get("ratio", 0.2)),
-                            allowlist_path=onchain_paths.get("allowlist_rich"),
-                            params_dict=filter_params_rich,
-                        )
-                        allow_rich = str(res_rich.allowlist_path)
-                        print(f"  [filter] rich keep={len(res_rich.keep_features)}")
-                    except Exception as fe:  # pragma: no cover - defensive
-                        print(f"  [filter-warn] rich channel failed: {fe}")
+        # 对每个周期独立进行完整的特征筛选管线
+        for period_idx, period in enumerate(periods, start=1):
+            print(f"  Processing period {period_idx}/{len(periods)}: {period}")
+            step_t0 = time.time()
 
-                embedded_base_summary = None
-                embedded_rich_summary = None
-                if enable_base and embedded_enabled and pkl_base:
-                    try:
-                        emb_base = run_embedded_for_channel(
-                            expert_name=name,
-                            channel="base",
-                            pkl_path=onchain_paths.get("base_pkl") or pkl_base,
-                            val_mode=outer.get("mode", "days"),
-                            val_days=int(outer.get("days", 90)),
-                            val_ratio=float(outer.get("ratio", 0.2)),
-                            allowlist_path=allow_base,
-                            targets_override=union_targets,
-                            cfg=embedded_params_base,
-                        )
-                        embedded_base_summary = emb_base.summary
-                        print(f"  [embedded] base summary_rows={len(emb_base.summary)}")
-                    except Exception as ee:  # pragma: no cover - defensive
-                        print(f"  [embedded-warn] base channel failed: {ee}")
-                if enable_rich and embedded_enabled and (pkl_rich or onchain_paths.get("rich_pkl")):
-                    try:
-                        emb_rich = run_embedded_for_channel(
-                            expert_name=name,
-                            channel="rich",
-                            pkl_path=onchain_paths.get("rich_pkl") or pkl_rich,
-                            val_mode=outer.get("mode", "days"),
-                            val_days=int(outer.get("days", 90)),
-                            val_ratio=float(outer.get("ratio", 0.2)),
-                            allowlist_path=allow_rich,
-                            targets_override=union_targets,
-                            cfg=embedded_params_rich,
-                        )
-                        embedded_rich_summary = emb_rich.summary
-                        print(f"  [embedded] rich summary_rows={len(emb_rich.summary)}")
-                    except Exception as ee:  # pragma: no cover - defensive
-                        print(f"  [embedded-warn] rich channel failed: {ee}")
+            try:
+                allow_base: Optional[str] = None
+                allow_rich: Optional[str] = None
+                res_base = None
+                res_rich = None
 
-                # Step 1: base tree+perm
+                # 为当前周期准备输出目录
+                tree_out_base_period = os.path.join(tree_out_root, name, "base", "tree_perm", period)
+                tree_out_rich_period = os.path.join(tree_out_root, name, "rich", "tree_perm", period)
+                _ensure_dir(tree_out_base_period)
+                _ensure_dir(tree_out_rich_period)
+
+                if not args.skip_pre_aggregation:
+                    if enable_base and filter_enabled and pkl_base:
+                        try:
+                            res_base = run_filter_for_channel(
+                                expert_name=name,
+                                channel="base",
+                                pkl_path=onchain_paths.get("base_pkl") or pkl_base,
+                                val_mode=outer.get("mode", "days"),
+                                val_days=int(outer.get("days", 90)),
+                                val_ratio=float(outer.get("ratio", 0.2)),
+                                allowlist_path=onchain_paths.get("allowlist_base"),
+                                params_dict=filter_params_base,
+                            )
+                            allow_base = str(res_base.allowlist_path)
+                            print(f"  [filter] base keep={len(res_base.keep_features)}")
+                        except Exception as fe:  # pragma: no cover - defensive
+                            print(f"  [filter-warn] base channel failed: {fe}")
+                    if enable_rich and filter_enabled and (pkl_rich or onchain_paths.get("rich_pkl")):
+                        try:
+                            res_rich = run_filter_for_channel(
+                                expert_name=name,
+                                channel="rich",
+                                pkl_path=onchain_paths.get("rich_pkl") or pkl_rich,
+                                val_mode=outer.get("mode", "days"),
+                                val_days=int(outer.get("days", 90)),
+                                val_ratio=float(outer.get("ratio", 0.2)),
+                                allowlist_path=onchain_paths.get("allowlist_rich"),
+                                params_dict=filter_params_rich,
+                            )
+                            allow_rich = str(res_rich.allowlist_path)
+                            print(f"  [filter] rich keep={len(res_rich.keep_features)}")
+                        except Exception as fe:  # pragma: no cover - defensive
+                            print(f"  [filter-warn] rich channel failed: {fe}")
+
+                    embedded_base_summary = None
+                    embedded_rich_summary = None
+                    if enable_base and embedded_enabled and pkl_base:
+                        try:
+                            emb_base = run_embedded_for_channel(
+                                expert_name=name,
+                                channel="base",
+                                pkl_path=onchain_paths.get("base_pkl") or pkl_base,
+                                val_mode=outer.get("mode", "days"),
+                                val_days=int(outer.get("days", 90)),
+                                val_ratio=float(outer.get("ratio", 0.2)),
+                                allowlist_path=allow_base,
+                                targets_override=union_targets,
+                                cfg=embedded_params_base,
+                            )
+                            embedded_base_summary = emb_base.summary
+                            print(f"  [embedded] base summary_rows={len(emb_base.summary)}")
+                        except Exception as ee:  # pragma: no cover - defensive
+                            print(f"  [embedded-warn] base channel failed: {ee}")
+                    if enable_rich and embedded_enabled and (pkl_rich or onchain_paths.get("rich_pkl")):
+                        try:
+                            emb_rich = run_embedded_for_channel(
+                                expert_name=name,
+                                channel="rich",
+                                pkl_path=onchain_paths.get("rich_pkl") or pkl_rich,
+                                val_mode=outer.get("mode", "days"),
+                                val_days=int(outer.get("days", 90)),
+                                val_ratio=float(outer.get("ratio", 0.2)),
+                                allowlist_path=allow_rich,
+                                targets_override=union_targets,
+                                cfg=embedded_params_rich,
+                            )
+                            embedded_rich_summary = emb_rich.summary
+                            print(f"  [embedded] rich summary_rows={len(emb_rich.summary)}")
+                        except Exception as ee:  # pragma: no cover - defensive
+                            print(f"  [embedded-warn] rich channel failed: {ee}")
+
+                # Step 3: tree+perm for current period only
                 if enable_base and pkl_base:
-                    print("  Step 1/4: base tree+perm ...", end="", flush=True)
-                    summary_base = run_tree_perm(
-                    periods=periods,
-                    val_mode=outer.get("mode", "days"),
-                    val_days=int(outer.get("days", 90)),
-                    val_ratio=float(outer.get("ratio", 0.2)),
-                    topn_preview=3,
-                    out_dir=tree_out_base,
-                    allowlist_path=allow_base,
-                    pkl_path=pkl_base,
-                    time_perm=bool(perm_enabled),
-                    perm_method=str(perm.get("method", "cyclic_shift")),
-                    block_len=default_block_len,
-                    block_len_by_period=block_len_map,
-                    group_cols=group_cols,
-                    repeats=perm_repeats,
-                    targets_override=union_targets,
-                    embargo=perm_embargo,
-                    embargo_by_period=perm_embargo_by,
-                    purge=perm_purge,
-                    purge_by_period=perm_purge_by,
-                    n_estimators=perm_estimators,
-                    random_state=perm_seed,
-                )
-                    print(" done")
+                        print("  Step 3/4: base tree+perm ...", end="", flush=True)
+                        summary_base = run_tree_perm(
+                            periods=[period],  # 只处理当前周期
+                            val_mode=outer.get("mode", "days"),
+                            val_days=int(outer.get("days", 90)),
+                            val_ratio=float(outer.get("ratio", 0.2)),
+                            topn_preview=3,
+                            out_dir=tree_out_base_period,  # 使用周期特定的输出目录
+                            allowlist_path=allow_base,
+                            pkl_path=pkl_base,
+                            time_perm=bool(perm_enabled),
+                            perm_method=str(perm.get("method", "cyclic_shift")),
+                            block_len=default_block_len,
+                            block_len_by_period=block_len_map,
+                            group_cols=group_cols,
+                            repeats=perm_repeats,
+                            targets_override=union_targets,
+                            embargo=perm_embargo,
+                            embargo_by_period=perm_embargo_by,
+                            purge=perm_purge,
+                            purge_by_period=perm_purge_by,
+                            n_estimators=perm_estimators,
+                            random_state=perm_seed,
+                        )
+                        print(" done")
 
                 ran_rich = False
                 if enable_rich and (pkl_rich or onchain_paths.get("rich_pkl")):
-                    print("  Step 2/4: rich tree+perm ...", end="", flush=True)
+                    print("  Step 4/4: rich tree+perm ...", end="", flush=True)
                     summary_rich = run_tree_perm(
-                        periods=periods,
+                        periods=[period],  # 只处理当前周期
                         val_mode=outer.get("mode", "days"),
                         val_days=int(outer.get("days", 90)),
                         val_ratio=float(outer.get("ratio", 0.2)),
                         topn_preview=3,
-                        out_dir=tree_out_rich,
+                        out_dir=tree_out_rich_period,  # 使用周期特定的输出目录
                         allowlist_path=allow_rich,
                         pkl_path=onchain_paths.get("rich_pkl") or pkl_rich,
                         time_perm=bool(perm_enabled),
@@ -512,91 +519,91 @@ def main():
                         random_state=perm_seed + 17,
                     )
                     print(" done"); ran_rich = True
-            else:
-                print("  [skip] Skipping pre-aggregation steps as requested.")
-                # Need to determine if rich channel ran based on existence of its evidence directory
-                ran_rich = enable_rich and os.path.exists(tree_out_rich) and any(f.endswith('.csv') for f in os.listdir(tree_out_rich))
+                else:
+                    print("  [skip] Skipping pre-aggregation steps as requested.")
+                    # Need to determine if rich channel ran based on existence of its evidence directory
+                    ran_rich = enable_rich and os.path.exists(tree_out_rich) and any(f.endswith('.csv') for f in os.listdir(tree_out_rich))
 
 
-            # =================================================================================
-            # Step 3: Aggregation for Base, Rich, and Comprehensive channels
-            # =================================================================================
-            print("  Step 3/4: Aggregating channels ...")
-            aggregation_map = {}
-            expert_root_dir = os.path.join(tree_out_root, name)
+                # =================================================================================
+                # Step 5: Aggregation for Base, Rich, and Comprehensive channels (per period)
+                # =================================================================================
+                print("  Step 5/5: Aggregating channels for period...")
+                aggregation_map = {}
+                expert_root_dir = os.path.join(tree_out_root, name)
 
-            # --- Base Aggregation ---
-            if enable_base:
-                print("    - Aggregating: base")
-                pair_df_base = aggregate_tree_perm(tree_out_base)
-                core_df_base = build_unified_core(
-                    pair_df_base,
-                    weights_yaml,
-                    topk=int(agg.get("topk_core", 128)),
-                    topk_per_pair=int(agg.get("topk_per_pair", 0)) or None,
-                    min_appear_rate=float(agg.get("min_appear_rate", 0.0)) or None,
-                    min_appear_rate_era=float(min_appear_rate_era) if isinstance(min_appear_rate_era, (int, float)) else None,
-                )
-                out_dir_base = os.path.join(expert_root_dir, "base")
-                _ensure_dir(out_dir_base)
-                core_df_base.to_csv(os.path.join(out_dir_base, core_summary_csv_name), index=False)
-                export_selected_features(core_df_base, os.path.join(out_dir_base, core_allowlist_txt_name))
-                aggregation_map["base"] = {"core_df": core_df_base, "output_dir": out_dir_base, "pkl_path": pkl_base, "ran": True}
+                # --- Base Aggregation for current period ---
+                if enable_base:
+                    print("    - Aggregating: base")
+                    pair_df_base = aggregate_tree_perm(tree_out_base_period)
+                    core_df_base = build_unified_core(
+                        pair_df_base,
+                        weights_yaml,
+                        topk=int(agg.get("topk_core", 128)),
+                        topk_per_pair=int(agg.get("topk_per_pair", 0)) or None,
+                        min_appear_rate=float(agg.get("min_appear_rate", 0.0)) or None,
+                        min_appear_rate_era=float(min_appear_rate_era) if isinstance(min_appear_rate_era, (int, float)) else None,
+                    )
+                    out_dir_base = os.path.join(expert_root_dir, "base", period)
+                    _ensure_dir(out_dir_base)
+                    core_df_base.to_csv(os.path.join(out_dir_base, core_summary_csv_name), index=False)
+                    export_selected_features(core_df_base, os.path.join(out_dir_base, core_allowlist_txt_name))
+                    aggregation_map["base"] = {"core_df": core_df_base, "output_dir": out_dir_base, "pkl_path": pkl_base, "ran": True}
 
-            # --- Rich Aggregation ---
-            if enable_rich and ran_rich:
-                print("    - Aggregating: rich")
-                pair_df_rich = aggregate_tree_perm(tree_out_rich)
-                core_df_rich = build_unified_core(
-                    pair_df_rich,
-                    weights_yaml,
-                    topk=int(agg.get("topk_core", 128)),
-                    topk_per_pair=int(agg.get("topk_per_pair", 0)) or None,
-                    min_appear_rate=float(agg.get("min_appear_rate", 0.0)) or None,
-                    min_appear_rate_era=float(min_appear_rate_era) if isinstance(min_appear_rate_era, (int, float)) else None,
-                )
-                out_dir_rich = os.path.join(expert_root_dir, "rich")
-                _ensure_dir(out_dir_rich)
-                core_df_rich.to_csv(os.path.join(out_dir_rich, core_summary_csv_name), index=False)
-                export_selected_features(core_df_rich, os.path.join(out_dir_rich, core_allowlist_txt_name))
-                aggregation_map["rich"] = {"core_df": core_df_rich, "output_dir": out_dir_rich, "pkl_path": pkl_rich, "ran": True}
+                # --- Rich Aggregation for current period ---
+                if enable_rich and ran_rich:
+                    print("    - Aggregating: rich")
+                    pair_df_rich = aggregate_tree_perm(tree_out_rich_period)
+                    core_df_rich = build_unified_core(
+                        pair_df_rich,
+                        weights_yaml,
+                        topk=int(agg.get("topk_core", 128)),
+                        topk_per_pair=int(agg.get("topk_per_pair", 0)) or None,
+                        min_appear_rate=float(agg.get("min_appear_rate", 0.0)) or None,
+                        min_appear_rate_era=float(min_appear_rate_era) if isinstance(min_appear_rate_era, (int, float)) else None,
+                    )
+                    out_dir_rich = os.path.join(expert_root_dir, "rich", period)
+                    _ensure_dir(out_dir_rich)
+                    core_df_rich.to_csv(os.path.join(out_dir_rich, core_summary_csv_name), index=False)
+                    export_selected_features(core_df_rich, os.path.join(out_dir_rich, core_allowlist_txt_name))
+                    aggregation_map["rich"] = {"core_df": core_df_rich, "output_dir": out_dir_rich, "pkl_path": pkl_rich, "ran": True}
 
-            # --- Comprehensive Aggregation ---
-            if enable_base and enable_rich and ran_rich:
-                print("    - Aggregating: comprehensive")
-                core_df_comp = combine_channels(
-                    base_dir=tree_out_base,
-                    rich_dir=tree_out_rich,
-                    weights_yaml=weights_yaml,
-                    topk=int(agg.get("topk_core", 128)),
-                    topk_per_pair=int(agg.get("topk_per_pair", 64)) or None,
-                    min_appear_rate=float(agg.get("min_appear_rate", 0.5)) or None,
-                    rich_quality_weights=rich_quality_weights if isinstance(rich_quality_weights, dict) else {},
-                    min_appear_rate_era=float(min_appear_rate_era) if isinstance(min_appear_rate_era, (int, float)) else None,
-                )
-                out_dir_comp = os.path.join(expert_root_dir, "comprehensive")
-                _ensure_dir(out_dir_comp)
-                core_df_comp.to_csv(os.path.join(out_dir_comp, core_summary_csv_name), index=False)
-                export_selected_features(core_df_comp, os.path.join(out_dir_comp, core_allowlist_txt_name))
-                aggregation_map["comprehensive"] = {"core_df": core_df_comp, "output_dir": out_dir_comp, "pkl_path": pkl_rich or pkl_base, "ran": True}
+                # --- Comprehensive Aggregation for current period ---
+                if enable_base and enable_rich and ran_rich:
+                    print("    - Aggregating: comprehensive")
+                    core_df_comp = combine_channels(
+                        base_dir=tree_out_base_period,  # 只聚合当前周期的base结果
+                        rich_dir=tree_out_rich_period,  # 只聚合当前周期的rich结果
+                        weights_yaml=weights_yaml,
+                        topk=int(agg.get("topk_core", 128)),
+                        topk_per_pair=int(agg.get("topk_per_pair", 64)) or None,
+                        min_appear_rate=float(agg.get("min_appear_rate", 0.5)) or None,
+                        rich_quality_weights=rich_quality_weights if isinstance(rich_quality_weights, dict) else {},
+                        min_appear_rate_era=float(min_appear_rate_era) if isinstance(min_appear_rate_era, (int, float)) else None,
+                    )
+                    out_dir_comp = os.path.join(expert_root_dir, "comprehensive", period)
+                    _ensure_dir(out_dir_comp)
+                    core_df_comp.to_csv(os.path.join(out_dir_comp, core_summary_csv_name), index=False)
+                    export_selected_features(core_df_comp, os.path.join(out_dir_comp, core_allowlist_txt_name))
+                    aggregation_map["comprehensive"] = {"core_df": core_df_comp, "output_dir": out_dir_comp, "pkl_path": pkl_rich or pkl_base, "ran": True}
 
 
-            # =================================================================================
-            # Step 4: Wrapper search for each channel
-            # =================================================================================
-            print("  Step 4/4: Wrapper search for channels ...")
-            for channel_name, agg_result in aggregation_map.items():
-                if not agg_result.get("ran"):
-                    continue
+                # =================================================================================
+                # Step 6: Wrapper search for each channel (per period)
+                # =================================================================================
+                print("  Step 6/6: Wrapper search for channels...")
+                for channel_name, agg_result in aggregation_map.items():
+                    if not agg_result.get("ran"):
+                        continue
 
-                channel_core_df = agg_result["core_df"]
-                channel_output_dir = agg_result["output_dir"]
-                channel_pkl_path = agg_result["pkl_path"]
-                channel_selected_path = os.path.join(channel_output_dir, core_allowlist_txt_name)
+                    channel_core_df = agg_result["core_df"]
+                    channel_output_dir = agg_result["output_dir"]
+                    channel_pkl_path = agg_result["pkl_path"]
+                    channel_selected_path = os.path.join(channel_output_dir, core_allowlist_txt_name)
 
-                print(f"    - Wrapper search for: {channel_name}")
-                ds = load_split(
-                    pkl_path=channel_pkl_path,
+                    print(f"    - Wrapper search for: {channel_name}")
+                    ds = load_split(
+                        pkl_path=channel_pkl_path,
                     val_mode=outer.get("mode", "days"),
                     val_days=int(outer.get("days", 90)),
                     val_ratio=float(outer.get("ratio", 0.2)),
@@ -648,36 +655,44 @@ def main():
 
                 print(f"      ... done (score={score:.6f}, core={len(core_feats)}, plus={len(plus_feats)}, optimized={len(feats)})")
 
-                # Post-validation and summary generation would also go here, per-channel
-                # This part is omitted for brevity but would follow the same pattern of using channel-specific paths and data.
+                    # Post-validation and summary generation would also go here, per-channel
+                    # This part is omitted for brevity but would follow the same pattern of using channel-specific paths and data.
 
-        except Exception as e:
-            print(f"\n  [error] expert={name} failed: {e}")
-        finally:
-            dt = time.time() - step_t0
-            print(f"  [time] expert={name} elapsed={dt:.1f}s")
+                print(f"  [period] {period} completed successfully")
+
+            except Exception as e:
+                print(f"\n  [error] expert={name} period={period} failed: {e}")
+            finally:
+                dt = time.time() - step_t0
+                print(f"  [time] expert={name} period={period} elapsed={dt:.1f}s")
 
     try:
+        # 收集所有专家和周期的comprehensive特征，用于跨专家通用核心特征
         core_lists = []
         for key, ex in experts.items():
             name = ex.get("name", key)
-            core_dir = os.path.join(tree_out_root, name)
-            # Use comprehensive list as the basis for common features
-            export_path = os.path.join(core_dir, "comprehensive", core_allowlist_txt_name)
-            if not os.path.exists(export_path):
-                 # Fallback to base if comprehensive does not exist
-                 export_path = os.path.join(core_dir, "base", core_allowlist_txt_name)
+            periods = ex.get("periods", ["1h", "4h", "1d"]) if isinstance(ex.get("periods"), list) else ["1h", "4h", "1d"]
 
-            feats = _read_features(export_path)
-            if feats:
-                core_lists.append(set(feats))
+            for period in periods:
+                core_dir = os.path.join(tree_out_root, name)
+                # Use comprehensive list as the basis for common features
+                export_path = os.path.join(core_dir, "comprehensive", period, core_allowlist_txt_name)
+                if not os.path.exists(export_path):
+                     # Fallback to base if comprehensive does not exist
+                     export_path = os.path.join(core_dir, "base", period, core_allowlist_txt_name)
+
+                feats = _read_features(export_path)
+                if feats:
+                    core_lists.append(set(feats))
+
         if core_lists:
+            # 取交集作为跨专家跨周期的通用核心特征
             core_common = set.intersection(*core_lists) if len(core_lists) > 1 else core_lists[0]
             common_out = os.path.join(tree_out_root, "allowlist_core_common.txt")
             with open(common_out, "w", encoding="utf-8") as f:
                 for c in sorted(core_common):
                     f.write(f"{c}\n")
-            print(f"[save] unified core (intersection) -> {common_out} ({len(core_common)})")
+            print(f"[save] unified core (intersection across all experts/periods) -> {common_out} ({len(core_common)})")
     except Exception as e:
         print(f"[warn] failed to compose unified core: {e}")
 

@@ -136,7 +136,25 @@ if __name__ == "__main__":
                 f"缺少必要的叶子配置文件: {', '.join(missing)}. 请在 {leaf_dir} 下提供这些 YAML 文件。"
             )
         return found
-    sel_feats_path = _find_nearby_config("selected_features.txt", cfg_path, expert_name)
+    # 获取数据集配置声明的 reports 路径
+    ds_feature_list_path = dataset_cfg.get("feature_list_path") if isinstance(dataset_cfg, dict) else None
+
+    # 根据当前训练的周期动态调整特征文件路径
+    if ds_feature_list_path and cfg_period:
+        # 如果配置了feature_list_path且有period信息，则根据周期动态构建路径
+        import re
+        # 匹配reports/feature_evidence/Expert/channel/selected_features.txt格式
+        pattern = r'(reports/feature_evidence/[^/]+/[^/]+/)selected_features\.txt'
+        match = re.search(pattern, ds_feature_list_path)
+        if match:
+            base_path = match.group(1)
+            sel_feats_path = f"{base_path}{cfg_period}/selected_features.txt"
+        else:
+            # 如果不匹配预期格式，使用原有路径
+            sel_feats_path = ds_feature_list_path
+    else:
+        sel_feats_path = _find_nearby_config("selected_features.txt", cfg_path, expert_name)
+
     # 权重：优先 targets.yaml -> weights.by_target/custom；否则回退叶子 weights_config.yaml；都没有则全1
     weights_section = leaf_targets_obj.get("weights", {}) or {}
     if isinstance(weights_section, dict) and weights_section.get("by_target"):

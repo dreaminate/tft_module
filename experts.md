@@ -1,7 +1,4 @@
 
-
----
-
 # 专家体系总览（9 + 1 组合器，A+C 并行）
 
 > 当前实现总览（对齐现状）
@@ -25,7 +22,7 @@
 ## 多专家任务 + 推荐数据字段一览（Markdown 版）
 
 | # | 专家 | 最终任务 | Base 字段（长期可用） | Rich 字段（近年/高置信） |
-| - | - | - | - | - |
+|---|---|---|---|---|
 | 1 | Alpha-Dir（方向二分类） | binarytrend ↑/↓ | 价量技术面：OHLCV、MA/EMA、RSI、MACD、ADX、布林带宽、短-中期动量（5 / 20 / 60 bar return）等 | 衍生品简要摘要（Funding、OI 斜率）、链上活跃度、ETF 溢价（BTC/ETH）等 |
 | 2 | Alpha-Ret（收益回归） | logreturn、logsharpe_ratio | 同 Alpha-Dir Base + 滚动/ParK/EWMA 波动、价量背离 | Funding 斜率、OI 结构、清算密度、链上资金流净量、ETF 净申赎 |
 | 3a | Risk-Prob（极端风险分类） | drawdown_prob、vol_jump_prob | 历史波动率、ATR、偏度/峰度、价量异常密度 | Funding 异常峰值、OI 激增、隐含波动率曲面突变、深度骤减、爆仓笔数 |
@@ -38,6 +35,7 @@
 | 9 | 因子桥接（Macro ↔ Crypto） | factor_exposures{}、style_score | S&P500、VIX、DXY、10Y Yield、M2、黄金/原油价格等宏观 & 传统因子 | BTC-S&P 滚动相关、全球动量/风格指数、ETF 流向衍生因子 |
 
 ### 说明
+
 - Base：历史覆盖 ≥ 2015，价量 & 宏观为主；Rich：2020+ 才完整的链上、衍生品、ETF 等高置信新模态。
 - Risk 专家按 分类-回归 分家，避免损失冲突；训练期两路信号可由简易 MLP 融合为仓位上限函数。
 - 各字段均来自文档中对专家输入的具体推荐，已按可获取频率与任务适配性归类。
@@ -45,7 +43,7 @@
 ### 训练数据要点（摘录）
 
 | 关键环节 | 落地建议 |
-| - | - |
+|---|---|
 | 标注防泄露 | 所有标签先 shift(1)；慢频因子 shift→ffill 再广播。 |
 | 不平衡 | Risk-Prob 采用 事件级过采样 + focal-loss；其他分类用 class_weight。 |
 | 特征窗 | 多尺度 (20 / 60 / 240 bar)；Risk 增强杠杆 & 深度信号。 |
@@ -122,11 +120,15 @@
   - `expert_weight_prior{Alpha-Dir, Alpha-Ret, Risk, Derivs, Onchain, Regime, Structure, Relative, Factor}`；
   - `alpha_prior`（Base/Rich 初始权重）；
   - `uncertainty`、`recent_valid_perf`（滚动窗 Macro-F1）。
-- 训练与评估
-  - Loss：多类交叉熵（可含 class weight）。
-  - Metric：Macro-F1（主）、Balanced Accuracy；早停：Macro-F1 单指标。
-  - 校准：温度标定 / Platt scaling（离线校准，推理期应用）。
-  - 日志：分周期×分币统计混淆矩阵、每类 PR 曲线（可选）。
+
+### 训练与评估
+
+- Loss：多类交叉熵（可含 class weight）。
+- Metric：Macro-F1（主）、Balanced Accuracy；早停：Macro-F1 单指标。
+- 校准：温度标定 / Platt scaling（离线校准，推理期应用）。
+- 日志：分周期×分币统计混淆矩阵、每类 PR 曲线（可选）。
+
+---
 
 ## 7) 结构 / 突破（Key Levels / Breakout / ATR Slope）—统一为分类任务（确定版）
 
@@ -142,6 +144,8 @@
 - 训练与评估：多标签 BCE/Weighted-BCE；三分类 CE；Metric：PR-AUC（主）+ F1（阈值标定后）；早停：PR-AUC（多标签取 macro/加权平均）；阈值标定：以最近 3–6 个月验证窗做 F1 曲线寻优，按周期分开记录。
 - 如确需连续量（如“趋势持续步数期望”），请新建 7R 回归子模型或并入 Alpha-Ret，不与分类混训；并行时使用 多门控 MoE 为各任务独立路由专家。
 
+---
+
 ## 8) 相对强弱 & 价差（ETH/BTC & 跨币）
 
 - 任务：相对 `binarytrend` / `logreturn`（对价差/比价，不做绝对价）。
@@ -149,11 +153,15 @@
 - Rich：资金费率差、OI 结构差、链上活跃差、交易所溢价差、ETF 申赎差（BTC/ETH）。
 - 输出/角色：跨币超额强弱分、建议对冲比率；择币/换手与中性对冲引擎。
 
+---
+
 ## 9) 因子桥接（传统因子 ↔ 加密代理）
 
 - 任务：输出风格暴露（Momentum/LowVol/Carry/Liquidity/RelativeStrength/On-chain…）与轻量 `style_score` 先验；为 Z 层提供风格约束。
 - 实现：先用无训练 Score-Card（标准化线性打分），稳定后引入 ElasticNet/PLS/LGBM（带单调/复杂度约束）；对 Alpha-Ret/Alpha-Dir 进行正交化/残差化抑制漂移与重叠暴露。该“AI × 因子”融合路径以因子框架可解释性为锚、机器学习筛选与加权为增益。
 - 输出/角色：`factor_exposures{}`、`style_score`、`uncertainty`；风格锚/约束器（惩罚 Alpha 风格偏离）。
+
+---
 
 ## Z. 决策人 / 组合器（Gating + 加权 + 头寸规模化）
 
@@ -222,6 +230,7 @@
   - 缺失列表：`reports/experts/missing_fields.csv`
 
 示例（Alpha-Dir Base pinned 子集，按你的数据列对齐后）：
+
 ```
 open, high, low, close, volume, vwap,
 rsi, macd_hist, adx 或 adx_scaled, boll_bandwidth,

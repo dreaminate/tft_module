@@ -1,26 +1,23 @@
-data_path: data/pkl_merged/full_merged.pkl
+data_path: data/merged/expert_group/Risk-Prob-TFT-base/full_merged_with_fundamentals_Risk-Prob-TFT-base.pkl
 expert: Risk-Prob-TFT
-period: "1h"
+period: 1h
 modality_set: base
-
 val_mode: ratio
 val_ratio: 0.2
 val_days: 14
-
 batch_size: 128
 num_workers: 4
 hidden_size: 64
 lstm_layers: 1
 attention_head_size: 2
 dropout: 0.1
-learning_rate: 3.0e-3
+learning_rate: 0.003
 max_epochs: 2
-precision: "16-mixed"
+precision: 16-mixed
 grad_clip: 0.2
 accumulate: 1
 early_stop_patience: 3
 log_name: Risk-Prob-TFT_1h_base
-
 min_epochs: 3
 monitor: val_loss
 devices: 1
@@ -41,9 +38,7 @@ add_relative_time_idx: true
 add_target_scales: false
 allow_missing_timesteps: true
 static_categoricals:
-  - symbol
-  - period
+- symbol
+- period
 static_reals: []
 log_metrics_to_prog_bar: false
-
-

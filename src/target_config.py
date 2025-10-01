@@ -52,7 +52,22 @@ def process_period_targets(df: pd.DataFrame, period: str, future_col: str, symbo
     df["_orig_ts"] = df["timestamp"]
     df = compute_targets(df, period, future_col, feature_flags)
     n_before = len(df)
-    df = df.dropna().reset_index(drop=True)
+    
+    # 🔧 修复：智能NaN清理 - 只删除关键目标列NaN的行，忽略占位符目标
+    essential_targets = [
+        "target_logreturn", "target_binarytrend", "target_logsharpe_ratio",
+        "target_vol_jump_prob", "target_realized_vol", "target_breakout_prob"
+    ]
+    # 只检查存在且不是全NaN占位符的目标列
+    critical_cols = [col for col in essential_targets if col in df.columns and not df[col].isna().all()]
+    
+    if critical_cols:
+        # 只删除关键目标列有NaN的行
+        df = df.dropna(subset=critical_cols).reset_index(drop=True)
+    else:
+        # 如果没有关键目标列，至少确保有基础数据
+        df = df.dropna(subset=["close", "open", "high", "low"], how="all").reset_index(drop=True)
+    
     n_after = len(df)
     print(f"[✅] {period} | rows: {n_before} → {n_after} (drop {n_before-n_after})")
     return df
@@ -159,31 +174,40 @@ def compute_targets(df: pd.DataFrame, period: str, future_col: str, flags: Dict[
 
     # === 新增目标：fundflow_strength（回归） ===
     if flags.get("target_fundflow_strength", False):
-        # 需要以下列（已在融合阶段 shift/ffill，并可能做过标准化）：
-        # exch_netflow(卖压取负)、stablecoin_mcap(增量)、etf_flow、cb_premium
-        w_ex, w_st, w_etf, w_cb = 0.35, 0.25, 0.25, 0.15
-        ex = df.get("exch_netflow")
-        st = df.get("stablecoin_mcap")
-        et = df.get("etf_flow")
-        cb = df.get("cb_premium")
-        # 差分/标准化（鲁棒）：
-        def _z(x: pd.Series):
-            if x is None: return None
-            xm = x.astype(float)
-            mu = xm.mean(); sd = xm.std(ddof=0)
-            sd = sd if sd and sd > 1e-6 else 1.0
-            return (xm - mu) / sd
-        ex_z = -_z(ex) if ex is not None else 0.0   # 净流出为正卖压 → 取负
-        st_d = st.diff() if st is not None else None
-        st_z = _z(st_d) if st_d is not None else 0.0
-        et_z = _z(et) if et is not None else 0.0
-        cb_z = _z(cb) if cb is not None else 0.0
-        df["target_fundflow_strength"] = (
-            w_ex * (ex_z if isinstance(ex_z, pd.Series) else 0.0) +
-            w_st * (st_z if isinstance(st_z, pd.Series) else 0.0) +
-            w_etf * (et_z if isinstance(et_z, pd.Series) else 0.0) +
-            w_cb * (cb_z if isinstance(cb_z, pd.Series) else 0.0)
-        )
+        # 检查必需列是否存在，若不存在则跳过生成此目标
+        required_cols = ["exch_netflow", "stablecoin_mcap", "etf_flow", "cb_premium"]
+        missing_cols = [c for c in required_cols if c not in df.columns]
+        
+        if missing_cols:
+            print(f"⚠️ 跳过 target_fundflow_strength：缺少基础数据列 {missing_cols}")
+            # 不创建占位符列，避免影响数据清理过程
+            pass
+        else:
+            # 需要以下列（已在融合阶段 shift/ffill，并可能做过标准化）：
+            # exch_netflow(卖压取负)、stablecoin_mcap(增量)、etf_flow、cb_premium
+            w_ex, w_st, w_etf, w_cb = 0.35, 0.25, 0.25, 0.15
+            ex = df.get("exch_netflow")
+            st = df.get("stablecoin_mcap")
+            et = df.get("etf_flow")
+            cb = df.get("cb_premium")
+            # 差分/标准化（鲁棒）：
+            def _z(x: pd.Series):
+                if x is None: return None
+                xm = x.astype(float)
+                mu = xm.mean(); sd = xm.std(ddof=0)
+                sd = sd if sd and sd > 1e-6 else 1.0
+                return (xm - mu) / sd
+            ex_z = -_z(ex) if ex is not None else 0.0   # 净流出为正卖压 → 取负
+            st_d = st.diff() if st is not None else None
+            st_z = _z(st_d) if st_d is not None else 0.0
+            et_z = _z(et) if et is not None else 0.0
+            cb_z = _z(cb) if cb is not None else 0.0
+            df["target_fundflow_strength"] = (
+                w_ex * (ex_z if isinstance(ex_z, pd.Series) else 0.0) +
+                w_st * (st_z if isinstance(st_z, pd.Series) else 0.0) +
+                w_etf * (et_z if isinstance(et_z, pd.Series) else 0.0) +
+                w_cb * (cb_z if isinstance(cb_z, pd.Series) else 0.0)
+            )
 
     # === 新增目标：vol_jump_prob（分类） ===
     if flags.get("target_vol_jump_prob", False):
@@ -214,4 +238,18 @@ def compute_targets(df: pd.DataFrame, period: str, future_col: str, flags: Dict[
 
     # 清理临时列
     df.drop(columns=["logreturn", "binary_trend", "past_logreturn", "future_logreturn"], inplace=True, errors="ignore")
+    
+    # 🔧 健壮性检查：报告生成目标的统计信息
+    target_cols = [c for c in df.columns if c.startswith("target_")]
+    if target_cols:
+        print(f"\n📊 目标生成统计 ({period}):")
+        for col in target_cols:
+            if col in df.columns:
+                valid_count = df[col].notna().sum()
+                total_count = len(df)
+                valid_pct = valid_count / total_count if total_count > 0 else 0
+                print(f"  {col}: {valid_count}/{total_count} ({valid_pct:.1%}) 有效值")
+                if valid_pct < 0.1:  # 有效值少于10%
+                    print(f"    ⚠️ 警告：{col} 有效值过少，可能影响训练效果")
+    
     return df
