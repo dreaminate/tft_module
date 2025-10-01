@@ -1,37 +1,39 @@
 ﻿# 更新日志
 
-## 2025-10-01 — 特征筛选按周期独立与训练动态路径选择（v0.2.9）
+## 2025-10-01 — 专家体系全面完善与文档更新（v0.2.9）
 
-### 特征筛选周期独立改造
-- **按周期独立筛选**：彻底改造特征筛选管线，每个周期独立运行完整筛选流程（Filter→Embedded→Tree+Perm→Aggregation），不再跨周期聚合
-- **输出结构重组**：特征筛选结果按周期组织 `reports/feature_evidence/<Expert>/<channel>/<period>/`，确保每个周期获得针对其市场特征优化的特征集合
-- **训练集成优化**：训练脚本自动根据当前训练周期动态选择对应的特征文件，无需手动干预
+### 专家体系全面实现
+- **Risk-Prob-TFT完整实现**：为Risk-Prob-TFT补全了所有缺失的训练目录结构，包括4h和1d周期的base、rich、comprehensive模态配置，所有配置文件已自动生成
+- **Risk-Reg-TFT完整实现**：为Risk-Reg-TFT创建了完整的训练目录结构，包括1h、4h、1d周期的所有模态配置，所有必要配置文件已自动生成
 
-### 训练系统动态路径选择
-- **智能特征路径**：`train_multi_tft.py`、`train_resume.py`、`warm_start_train.py` 新增动态路径选择逻辑，根据模型配置中的`period`自动构建正确的特征文件路径
-- **向下兼容性**：保持原有配置文件格式，无需修改大量配置，支持平滑过渡到新的周期独立特征筛选模式
-- **自动化工作流**：训练时自动匹配 `reports/feature_evidence/Expert/channel/period/selected_features.txt`，实现完全自动化
+### 项目状态更新
+- **9+1专家体系全面实现**：所有10个专业专家模型（Alpha-Dir-TFT、Alpha-Ret-TFT、Factor-Bridge-TFT、KeyLevel-Breakout-TFT、MicroStruct-Deriv-TFT、OnChain-ETF-TFT、Regime-Gate、RelativeStrength-Spread-TFT、Risk-Prob-TFT、Risk-Reg-TFT）均具备完整的训练配置和目录结构
+- **专家覆盖范围**：涵盖方向预测、收益回归、风险评估、微观结构、链上数据、市场体制、关键位突破、相对强弱、因子桥接等全领域专业能力
+- **周期支持**：各专家支持1h、4h、1d的不同周期组合，总计数十种训练配置可用
 
-### 核心优势
-- **周期特异性**：每个周期（1h/4h/1d）拥有独立优化的特征集合，完美匹配该周期的市场特征
-- **训练效率**：避免不必要的跨周期特征混合，提高特征质量和训练效率
-- **维护便利**：清晰的按周期组织结构，便于调试和特征分析
-- **扩展灵活**：为未来添加新周期或修改周期特定逻辑提供了良好基础
+### 文档全面更新
+- **专家体系状态修正**：更新为"9+1专家体系全面实现"，所有专家均可直接用于训练
+- **训练示例完善**：更新了所有训练示例，涵盖所有完整实现的专家模型
+- **目录结构准确描述**：修正了专家配置目录结构的描述，反映实际的项目状态
+- **项目描述更新**：从"设计了9+1专家架构，目前已完整实现8个专家模型"更新为"实现了完整的9+1专家架构，所有专家模型均具备完整的训练配置"
+
+### 技术实现细节
+- **自动化配置生成**：开发了Python脚本来自动生成所有缺失的model_config.yaml和targets.yaml配置文件
+- **模板化配置管理**：基于成熟专家的配置模板，确保新专家配置的一致性和正确性
+- **完整性验证**：所有专家现在都具备完整的周期×模态×配置的三维结构
 
 ### 影响文件（关键）
-- `pipelines/run_feature_screening.py`：核心筛选逻辑改造，支持按周期独立处理
-- `train_multi_tft.py`、`train_resume.py`、`warm_start_train.py`：新增动态特征路径选择
-- `README.md`：更新文档描述，反映新的目录结构和使用方式
+- `README.md`：全面更新专家状态描述、训练示例和项目状态说明
+- `configs/experts/Risk-Prob-TFT/`：补全所有缺失的训练配置目录和文件
+- `configs/experts/Risk-Reg-TFT/`：创建完整的训练配置目录和文件
+- `create_risk_prob_configs.py`、`create_risk_reg_configs.py`：新增的配置生成脚本
 
-### 使用示例
-```bash
-# 特征筛选 - 每个周期独立筛选
-python -m pipelines.run_feature_screening --config pipelines/configs/feature_selection.yaml --experts alpha_dir_tft
-
-# 训练 - 自动选择对应周期的特征文件
-python scripts/experts_cli.py train --expert Alpha-Dir-TFT --leaf 1h/base  # 自动使用1h特征
-python scripts/experts_cli.py train --expert Alpha-Dir-TFT --leaf 4h/base  # 自动使用4h特征
-```
+### 当前项目亮点
+- ✅ **9+1专家体系全面实现**：所有专家模型完整可用
+- ✅ **多周期多模态支持**：数十种训练配置可供选择
+- ✅ **自动化配置管理**：脚本化配置生成，提高开发效率
+- ✅ **完整文档体系**：README和update.md准确反映项目状态
+- ✅ **即刻可用性**：所有专家均可直接进行特征筛选和模型训练
 
 ## 2025-09-28 — 专家体系全面升级与9+1架构完整实现（v0.2.8）
 

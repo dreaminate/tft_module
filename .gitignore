@@ -17,7 +17,7 @@ __pycache__/
 *.ckpt
 *.pt
 *.pth
-
+reports/
 # 忽略数据文件（你特别关心的）
 data/**
 !data/*.py

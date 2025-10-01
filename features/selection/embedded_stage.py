@@ -366,6 +366,7 @@ def run_embedded_stage(
     allowlist_path: Optional[str],
     params: Optional[EmbeddedParams] = None,
     targets_override: Optional[List[str]] = None,
+    periods_override: Optional[List[str]] = None,
 ) -> EmbeddedResult:
     out_dir = _output_dir(expert_name, channel)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -380,7 +381,7 @@ def run_embedded_stage(
         targets_override=targets_override,
     )
     rows: List[pd.DataFrame] = []
-    periods = ds.periods
+    periods = periods_override or ds.periods
     features = ds.features
 
     # optional: load VSN (variable selection) importance from TFT checkpoint exported CSV
@@ -409,7 +410,7 @@ def run_embedded_stage(
             continue
         if params.sample_cap and len(tr_df) > params.sample_cap:
             tr_df = tr_df.sample(params.sample_cap, random_state=params.random_state)
-        print(f"[embedded] period={period} | rows={len(tr_df)} targets={len(ds.targets)}", flush=True)
+        print(f"[embedded] period={period} | rows={len(tr_df)} targets={len(ds.targets)} (processing all periods from dataset)", flush=True)
         for target in ds.targets:
             if target not in tr_df.columns:
                 continue
@@ -472,6 +473,7 @@ def run_embedded_for_channel(
     allowlist_path: Optional[str],
     targets_override: Optional[List[str]] = None,
     cfg: Dict[str, object] | None = None,
+    periods_override: Optional[List[str]] = None,
 ) -> EmbeddedResult:
     params = EmbeddedParams()
     if cfg:
@@ -502,5 +504,6 @@ def run_embedded_for_channel(
         val_ratio=val_ratio,
         allowlist_path=allowlist_path,
         targets_override=targets_override,
+        periods_override=periods_override,
         params=params,
     )

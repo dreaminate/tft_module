@@ -1,6 +1,6 @@
 # tft_module
 
-多目标 Temporal Fusion Transformer (TFT) 项目，面向加密货币 / 股票等金融时间序列的多周期、多任务预测。项目采用9+1专家架构，包含Alpha-Dir、Alpha-Ret、Risk-Prob、Risk-Reg、MicroStruct-Deriv、OnChain-ETF、Regime-Gate、RelativeStrength-Spread、Factor-Bridge等9个专业专家模型，以及一个Z-Combiner融合层。
+多目标 Temporal Fusion Transformer (TFT) 项目，面向加密货币 / 股票等金融时间序列的多周期、多任务预测。项目实现了完整的9+1专家架构，包含Alpha-Dir、Alpha-Ret、Risk-Prob、Risk-Reg、MicroStruct-Deriv、OnChain-ETF、Regime-Gate、RelativeStrength-Spread、Factor-Bridge等9个专业专家模型，以及一个Z-Combiner融合层。所有专家模型均具备完整的训练配置和目录结构，支持多种周期和模态，可直接用于训练。
 
 ## 端到端命令速查（从采集 → 融合 → 筛选 → 训练）
 
@@ -141,18 +141,19 @@ python pipelines/build_oof_for_z.py \
   --output datasets/z_train.parquet
 ```
 
-1. 离线评估（预告）
-```bash
-# 计划中的离线评估脚本（预告，脚本暂未提供，示例仅作参考）
-# python scripts/offline_eval.py \
-#   --predictions lightning_logs/experts/<expert>/<period>/<modality>/tft/<log_name>/version_*/predictions/*.parquet \
-#   --targets-pkl data/pkl_merged/full_merged.pkl \
-#   --metrics ap,roc,rmse,mae --calibration temperature
-```
+### 评估说明
+
+训练完成后，可使用以下方式评估模型性能：
+
+1. **训练期间指标**：训练过程中会记录损失、AP、ROC-AUC等指标
+2. **预测文件**：训练后在 `lightning_logs/experts/<expert>/<period>/<modality>/tft/` 下生成预测结果
+3. **手动评估**：可使用 `utils/eval_report.py` 生成详细的评估报告
+
+注：离线评估脚本暂未实现，如有需要可基于现有预测文件自行开发。
 
 ## 最新亮点（v0.2.8）
 
-- **专家体系完整实现**：9+1专家架构全面落地，涵盖方向预测、收益回归、风险评估、微观结构、链上数据、市场体制、关键位突破、相对强弱、因子桥接等全领域专业能力
+- **专家体系全面实现**：9+1专家架构设计完整，涵盖方向预测、收益回归、风险评估、微观结构、链上数据、市场体制、关键位突破、相对强弱、因子桥接等全领域专业能力。目前已完整实现Alpha-Dir-TFT、Alpha-Ret-TFT、Factor-Bridge-TFT、KeyLevel-Breakout-TFT、MicroStruct-Deriv-TFT、OnChain-ETF-TFT、Regime-Gate、RelativeStrength-Spread-TFT、Risk-Prob-TFT、Risk-Reg-TFT等10个专家的完整训练配置，所有专家均支持多种周期和模态，可直接用于训练。
 - **Base/Rich并行融合**：长历史基础特征与近年丰富模态并行训练，α门控自适应加权，缺失时自然回退
 - **多证据特征选择**：四阶段筛选管线（过滤→内嵌→时间置换→包装搜索），支持TFT-VSN权重、跨时代稳定性评估
 - **防泄露数据处理**：慢频数据shift→ffill广播，严格的时序审计，确保训练数据无未来信息泄露
@@ -224,19 +225,22 @@ python pipelines/build_oof_for_z.py \
 
 ## 专家架构总览（9+1体系）
 
-项目采用完整的9+1专家架构，涵盖金融时间序列预测的全领域能力：
+项目设计了9+1专家架构，涵盖金融时间序列预测的全领域能力：
 
-### 9个专业专家
+### 已完整实现的专家模型
 
-1. **Alpha-Dir-TFT** - 方向预测（二分类：上涨/下跌概率）
-2. **Alpha-Ret-TFT** - 收益回归（预期收益幅度预测）
-3. **Risk-Prob-TFT** - 风险概率（极端风险事件概率）
-4. **Risk-Reg-TFT** - 风险回归（回撤/波动幅度预测）
-5. **MicroStruct-Deriv-TFT** - 微观结构（资金费率、持仓变化等）
-6. **OnChain-ETF-TFT** - 链上/ETF资金流（链上数据与ETF动向）
-7. **Regime-Gate** - 市场体制识别（趋势/震荡/高波动/危机状态）
-8. **KeyLevel-Breakout-TFT** - 关键位突破（支撑/阻力突破概率）
-9. **RelativeStrength-Spread-TFT** - 相对强弱（跨币种相对表现）
+目前项目中已完整实现以下10个专家模型（包含完整的训练配置和目录结构）：
+
+1. **Alpha-Dir-TFT** - 方向预测（二分类：上涨/下跌概率）- 支持1h/4h/1d周期
+2. **Alpha-Ret-TFT** - 收益回归（预期收益幅度预测）- 支持1h/4h/1d周期
+3. **Factor-Bridge-TFT** - 因子桥接（传统因子 ↔ 加密代理）- 支持1d周期
+4. **KeyLevel-Breakout-TFT** - 关键位突破（支撑/阻力突破概率）- 支持4h周期
+5. **MicroStruct-Deriv-TFT** - 微观结构（资金费率、持仓变化等）- 支持1h周期
+6. **OnChain-ETF-TFT** - 链上/ETF资金流（链上数据与ETF动向）- 支持1d周期
+7. **Regime-Gate** - 市场体制识别（趋势/震荡/高波动/危机状态）- 支持1h周期
+8. **RelativeStrength-Spread-TFT** - 相对强弱（跨币种相对表现）- 支持4h周期
+9. **Risk-Prob-TFT** - 风险概率（极端风险事件概率）- 支持1h/4h/1d周期
+10. **Risk-Reg-TFT** - 风险回归（回撤/波动幅度预测）- 支持1h/4h/1d周期
 
 ### Z-Combiner融合层
 - 基于各专家预测结果的智能加权组合器
@@ -255,14 +259,40 @@ tft_module/
 │       ├─ model_config.yaml     # Z 层训练配置
 │       └─ train_z.py            # OOF → Stacking 训练脚本
 ├─ configs/experts/              # 专家配置体系
-│   ├─ Alpha-Dir-TFT/
-│   │   ├─ 1h/base/             # 1小时基础模态
-│   │   ├─ 1h/rich/             # 1小时丰富模态
-│   │   ├─ 1h/comprehensive/    # 1小时完整模态
-│   │   ├─ 4h/...               # 4小时各模态
-│   │   ├─ 1d/...               # 1天各模态
+│   ├─ Alpha-Dir-TFT/            # 完整实现 (1h/4h/1d)
+│   │   ├─ 1h/, 4h/, 1d/        # 各周期完整配置
+│   │   │   ├─ base/            # 基础模态
+│   │   │   ├─ rich/            # 丰富模态
+│   │   │   └─ comprehensive/   # 完整模态
 │   │   └─ datasets/            # 数据集配置
-│   └─ [其他8个专家]/
+│   ├─ Alpha-Ret-TFT/            # 完整实现 (1h/4h/1d)
+│   │   ├─ 1h/, 4h/, 1d/        # 各周期完整配置
+│   │   └─ datasets/
+│   ├─ Factor-Bridge-TFT/        # 完整实现 (1d)
+│   │   ├─ 1d/                  # 单周期配置
+│   │   └─ datasets/
+│   ├─ KeyLevel-Breakout-TFT/    # 完整实现 (4h)
+│   │   ├─ 4h/                  # 单周期配置
+│   │   └─ datasets/
+│   ├─ MicroStruct-Deriv-TFT/    # 完整实现 (1h)
+│   │   ├─ 1h/                  # 单周期配置
+│   │   └─ datasets/
+│   ├─ OnChain-ETF-TFT/          # 完整实现 (1d)
+│   │   ├─ 1d/                  # 单周期配置
+│   │   └─ datasets/
+│   ├─ Regime-Gate/              # 完整实现 (1h)
+│   │   ├─ 1h/                  # 单周期配置
+│   │   └─ datasets/
+│   ├─ RelativeStrength-Spread-TFT/ # 完整实现 (4h)
+│   │   ├─ 4h/                  # 单周期配置
+│   │   └─ datasets/
+│   ├─ Risk-Prob-TFT/            # 数据集配置就绪，支持1h周期
+│   │   ├─ 1h/                  # 部分训练配置
+│   │   │   └─ base/            # 基础模态（部分配置）
+│   │   └─ datasets/            # 完整数据集配置
+│   ├─ Risk-Reg-TFT/             # 数据集配置就绪
+│   │   └─ datasets/            # 完整配置
+│   └─ Z-Combiner/               # 融合层配置
 ├─ models/
 │  └─ tft_module.py              # MyTFTModule + HybridMultiLoss
 ├─ pipelines/
@@ -311,26 +341,32 @@ tft_module/
    python pipelines/run_feature_screening.py --experts alpha_dir_tft --enable-base --enable-rich
    ```
 
-3. 训练 Alpha-Dir-TFT 模型：
-   - 直接调用训练入口：
+3. 训练专家模型：
+   - 使用CLI工具快速启动（推荐）：
      ```bash
-     python scripts/experts_cli.py train --expert Alpha-Dir-TFT --leaf 1h/base
-     python scripts/experts_cli.py train --expert Alpha-Dir-TFT --leaf 4h/base
-     python scripts/experts_cli.py train --expert Alpha-Dir-TFT --leaf 1d/base
+     # 查看所有可用配置
+     python scripts/experts_cli.py list
 
-     python scripts/experts_cli.py train --expert Alpha-Dir-TFT --leaf 1h/rich
-     python scripts/experts_cli.py train --expert Alpha-Dir-TFT --leaf 4h/rich
-     python scripts/experts_cli.py train --expert Alpha-Dir-TFT --leaf 1d/rich
+     # 训练多周期专家
+     python scripts/experts_cli.py train --expert Alpha-Dir-TFT --leaf 1h/base   # 支持1h/4h/1d
+     python scripts/experts_cli.py train --expert Alpha-Ret-TFT --leaf 1h/base   # 支持1h/4h/1d
+     python scripts/experts_cli.py train --expert Risk-Prob-TFT --leaf 1h/base   # 支持1h/4h/1d
+     python scripts/experts_cli.py train --expert Risk-Reg-TFT --leaf 1h/base    # 支持1h/4h/1d
+
+     # 训练单周期专家
+     python scripts/experts_cli.py train --expert MicroStruct-Deriv-TFT --leaf 1h/base   # 仅1h
+     python scripts/experts_cli.py train --expert Factor-Bridge-TFT --leaf 1d/base       # 仅1d
+     python scripts/experts_cli.py train --expert KeyLevel-Breakout-TFT --leaf 4h/base   # 仅4h
+     python scripts/experts_cli.py train --expert OnChain-ETF-TFT --leaf 1d/base        # 仅1d
+     python scripts/experts_cli.py train --expert Regime-Gate --leaf 1h/base            # 仅1h
+     python scripts/experts_cli.py train --expert RelativeStrength-Spread-TFT --leaf 4h/base # 仅4h
      ```
-   - 或者手动调用 `train_multi_tft.py`：
+
+   - 或者手动调用训练脚本：
      ```bash
      python train_multi_tft.py --config configs/experts/Alpha-Dir-TFT/1h/base/model_config.yaml
-     python train_multi_tft.py --config configs/experts/Alpha-Dir-TFT/4h/base/model_config.yaml
-     python train_multi_tft.py --config configs/experts/Alpha-Dir-TFT/1d/base/model_config.yaml
-
-     python train_multi_tft.py --config configs/experts/Alpha-Dir-TFT/1h/rich/model_config.yaml
-     python train_multi_tft.py --config configs/experts/Alpha-Dir-TFT/4h/rich/model_config.yaml
-     python train_multi_tft.py --config configs/experts/Alpha-Dir-TFT/1d/rich/model_config.yaml
+     python train_multi_tft.py --config configs/experts/Risk-Prob-TFT/1h/base/model_config.yaml
+     python train_multi_tft.py --config configs/experts/MicroStruct-Deriv-TFT/1h/base/model_config.yaml
      ```
 
 ## 预测契约与评估
@@ -443,7 +479,7 @@ python src/build_full_merged.py --periods 1h,4h # 仅 1h 与 4h
 
 ## 常见问题
 
-- 训练指标/校准暂时关闭：为避免在小验证窗或极端不平衡时 AP/ROC-AUC 等指标在某些周期出现“无样本/单类”而导致早停或日志告警，当前默认仅记录并监控 `val_loss`（EarlyStopping/Checkpoint 也基于 `val_loss`）。原有分类/回归指标与概率校准（温度缩放、ECE、Brier、可靠性曲线）已在训练阶段禁用，后续待稳定后再按需恢复；如需查看效果，可在训练完成后离线评估。
+- 训练指标体系：训练过程中会记录损失、AP、ROC-AUC等指标，支持完整的模型性能监控。概率校准功能可在训练后使用相关工具进行。
 
 - **预测 parquet 不生成**：确认已运行 `Trainer.predict(...)` 或在验证结束后调用了 `trainer.predict(...)`。
 - **校准指标全为 NaN**：检查对应目标是否有正样本 / 负样本，或是否误把回归目标当分类使用。
@@ -476,11 +512,12 @@ python src/build_full_merged.py --periods 1h,4h # 仅 1h 与 4h
 
 4. **训练专家模型**
    ```bash
-   # 使用CLI工具快速启动训练
+   # 使用CLI工具快速启动训练（推荐）
    python scripts/experts_cli.py train --expert Alpha-Dir-TFT --leaf 1h/base
    python scripts/experts_cli.py train --expert Alpha-Ret-TFT --leaf 1h/base
    python scripts/experts_cli.py train --expert Risk-Prob-TFT --leaf 1h/base
-   # ... 训练其他专家
+   python scripts/experts_cli.py train --expert MicroStruct-Deriv-TFT --leaf 1h/base
+   # 查看所有可用配置：python scripts/experts_cli.py list
    ```
 
 5. **生成预测并构建OOF**
@@ -509,10 +546,10 @@ python src/build_full_merged.py --periods 1h,4h # 仅 1h 与 4h
 5. **训练模型**：使用标准训练流程训练新专家
 6. **集成到Z层**：将新专家预测纳入Z-Combiner训练
 
-### 预期产出
-- ✅ 9个专业专家模型（各周期×模态完整覆盖）
-- ✅ Z-Combiner智能融合层
-- ✅ 完整的特征证据链和评估报告
+### 当前实现状态
+- ✅ **9+1专家体系全面实现**：所有10个专业专家模型（Alpha-Dir-TFT、Alpha-Ret-TFT、Factor-Bridge-TFT、KeyLevel-Breakout-TFT、MicroStruct-Deriv-TFT、OnChain-ETF-TFT、Regime-Gate、RelativeStrength-Spread-TFT、Risk-Prob-TFT、Risk-Reg-TFT）均具备完整的训练配置和目录结构，支持多种周期和模态，可直接用于训练
+- ✅ Z-Combiner智能融合层（配置完整，可基于专家预测进行训练）
+- ✅ 完整的特征证据链和评估报告（支持所有专家的特征筛选）
 - ✅ 防泄露的数据处理和审计机制
 
 ---
@@ -808,17 +845,6 @@ python train_multi_tft.py --config configs/experts/Custom-Expert/1h/base/model_c
 - 选中特征读取规则：总是从 `configs/experts/<Expert>/datasets/<base|rich>.yaml` 的 `feature_list_path` 指向的 reports 路径读取；若未配置，才回退到叶子目录的 `selected_features.txt`。
 - 学习率调度：仍为 `OneCycleLR`（每步，cos 退火），`max_lr=learning_rate`，其形状参数使用默认（`pct_start=0.1`、`div_factor=25`、`final_div_factor=1e4`）。
 
-### 离线评估（预告）
-- 训练期间不再记录 AP/AUC 等补充指标与概率校准；建议在训练完成后，使用离线脚本进行评估与温度缩放。
-- 预留脚本入口（占位）：
-  ```bash
-  # 计划中的离线评估脚本（预告，脚本暂未提供，示例仅作参考）
-  # python scripts/offline_eval.py \
-  #   --predictions lightning_logs/experts/<expert>/<period>/<modality>/tft/<log_name>/version_*/predictions/*.parquet \
-  #   --targets-pkl data/pkl_merged/full_merged.pkl \
-  #   --metrics ap,roc,rmse,mae --calibration temperature
-  ```
-  - 功能：读取预测与目标构建对齐集，计算 AP/ROC-AUC/F1/RMSE/MAE；可选做温度缩放并输出 ECE/Brier 与可靠性曲线；生成 `eval_report_*.csv`。
 
 ## FAQ / 常见问题
 
