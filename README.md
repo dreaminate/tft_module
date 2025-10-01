@@ -2,6 +2,57 @@
 
 多目标 Temporal Fusion Transformer (TFT) 项目，面向加密货币 / 股票等金融时间序列的多周期、多任务预测。项目实现了完整的9+1专家架构，包含Alpha-Dir、Alpha-Ret、Risk-Prob、Risk-Reg、MicroStruct-Deriv、OnChain-ETF、Regime-Gate、RelativeStrength-Spread、Factor-Bridge等9个专业专家模型，以及一个Z-Combiner融合层。所有专家模型均具备完整的训练配置和目录结构，支持多种周期和模态，可直接用于训练。
 
+## 项目扩展性
+
+### 新加密货币添加支持
+
+项目完全支持新加密货币的添加，整个管线具备良好的扩展性：
+
+**✅ 支持的新币种添加流程**：
+```bash
+# 1. 修改数据采集配置
+# 编辑 src/ccatch.py 中的 BASE_SYMBOLS，添加新币种如 'DOGE/USDT'
+
+# 2. 运行数据采集（自动下载新币种数据）
+python src/ccatch.py
+
+# 3. 构建完整数据集（自动包含新币种）
+python src/build_full_merged.py --periods 1h,4h,1d
+
+# 4. 数据融合（自动发现并处理新币种）
+python src/fuse_fundamentals.py
+
+# 5. 特征筛选（自动适配新币种，无需额外配置）
+python -m pipelines.run_feature_screening --config pipelines/configs/feature_selection.yaml
+
+# 6. 模型训练（自动识别新币种数据）
+python scripts/experts_cli.py train --expert Alpha-Dir-TFT --leaf 1h/base
+```
+
+**技术特点**：
+- ✅ **自动化币种发现**：数据处理脚本自动识别新币种，无需手动配置
+- ✅ **技术指标自适应**：所有技术指标计算自动适用于新币种
+- ✅ **目标生成自动化**：预测目标自动为新币种生成
+- ✅ **防泄露保护**：新币种数据自动应用相同的数据处理和防泄露保护
+
+### 美股数据支持现状
+
+**⚠️ 当前不支持，需要扩展开发**：
+
+目前项目专注于加密货币数据，美股数据需要额外开发：
+
+**需要开发的组件**：
+- **数据采集脚本**：基于yfinance或其他美股数据源的自动化采集
+- **数据格式适配器**：美股数据格式转换（列名、时间格式等）
+- **技术指标扩展**：美股特有的技术指标（如机构持仓、成交量分析等）
+- **数据融合配置**：在融合管线中集成美股数据源
+
+**扩展路径**：
+1. 开发`src/catch_stocks.py`的自动化版本
+2. 修改数据加载器支持美股数据格式
+3. 扩展技术指标计算器支持美股指标
+4. 在融合配置中添加美股数据源
+
 ## 端到端命令速查（从采集 → 融合 → 筛选 → 训练）
 
 1) 采集与准备（API → 原始数据）
@@ -151,7 +202,7 @@ python pipelines/build_oof_for_z.py \
 
 注：离线评估脚本暂未实现，如有需要可基于现有预测文件自行开发。
 
-## 最新亮点（v0.2.8）
+## 最新亮点（v0.3.0）
 
 - **专家体系全面实现**：9+1专家架构设计完整，涵盖方向预测、收益回归、风险评估、微观结构、链上数据、市场体制、关键位突破、相对强弱、因子桥接等全领域专业能力。目前已完整实现Alpha-Dir-TFT、Alpha-Ret-TFT、Factor-Bridge-TFT、KeyLevel-Breakout-TFT、MicroStruct-Deriv-TFT、OnChain-ETF-TFT、Regime-Gate、RelativeStrength-Spread-TFT、Risk-Prob-TFT、Risk-Reg-TFT等10个专家的完整训练配置，所有专家均支持多种周期和模态，可直接用于训练。
 - **Base/Rich并行融合**：长历史基础特征与近年丰富模态并行训练，α门控自适应加权，缺失时自然回退
@@ -161,7 +212,7 @@ python pipelines/build_oof_for_z.py \
 - **统一预测契约**：标准化输出`{score, uncertainty, meta}`，支持多符号多头架构，自动校准与可靠性评估
 - **Z层智能组合**：基于专家预测和市场状态的动态权重分配，支持风格约束和风险制动
 
-### 训练与特征筛选体验（v0.2.8 增强）
+### 训练与特征筛选体验（v0.3.0 增强）
 
 - **XGBoost 2.x兼容**：所有特征筛选和树模型统一使用`tree_method="hist" + device="cuda"`，旧版自动回退
 - **专家化配置管理**：每个专家×周期×模态自包含完整配置，支持就近查找和自动推断
