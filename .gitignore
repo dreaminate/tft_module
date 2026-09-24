@@ -32,3 +32,6 @@ data/**
 .idea/
 # 忽略 PyTorch Lightning 日志
 lightning_logs/
+# 忽略训练过程产物
+catboost_info/
+stage_logs/
